@@ -1,361 +1,350 @@
-# FastAPI for AI Applications
+# Watheeq AI Analysis Service
 
-## What is FastAPI?
+**Sprint 3 -- AI-Powered Health Insurance Claims Analysis Microservice**
 
-[FastAPI](https://fastapi.tiangolo.com/) is a modern, high-performance web framework for building APIs with Python. For AI apps, it serves as the interface between your AI models and the outside world, allowing external systems to send data to your models and receive predictions or processing results. What makes FastAPI particularly appealing is its simplicity and elegance - it provides everything you need without unnecessary complexity.
+A standalone FastAPI microservice that provides AI-powered analysis of health insurance claims against policy documents. This service is the intelligence layer of the Watheeq AI platform, designed to be consumed by the main application (Next.js + Firebase) via REST API calls.
 
-```mermaid
 ---
-config:
-  theme: neutral
+
+## What This Service Does
+
+When a Claims Examiner picks a claim for review, this service:
+
+1. **Ingests** the claim data (patient info, treatment type, medical report PDF)
+2. **Extracts** text from both the medical report and policy document PDFs
+3. **Analyzes** the claim against the policy using an LLM (OpenAI GPT-4o)
+4. **Determines** coverage status (Covered / Not Covered / Partial)
+5. **Identifies** applicable policy clauses with exact citations
+6. **Generates** a draft response message for the examiner to review/edit
+
+All AI outputs are **recommendations only** -- no decision is finalized without explicit Claims Examiner approval (Human-in-the-Loop principle).
+
 ---
-sequenceDiagram
-    participant App as Application
-    participant API as FastAPI Layer
-    participant LLM as AI/LLM Service
-    
-    App->>API: Send request with data
-    API->>API: Validate data
-    API->>LLM: Process with AI model
-    LLM->>API: Return results
-    API->>App: Deliver formatted response
+
+## Architecture
+
+```
+Application (Next.js + Firebase)
+        |
+        v
+  FastAPI Layer (validate request)
+        |
+        v
+  AI/LLM Service (process with AI model)
+        |
+        v
+  Return formatted response
 ```
 
-### Why FastAPI for AI Engineering?
+**Design Pattern:** Thin routers (HTTP only) -> Thick services (all business logic)
 
-1. **Performance**: Built on Starlette and Pydantic, FastAPI is fast and just works.
-2. **Automatic Documentation**: FastAPI automatically generates interactive API documentation (via Swagger UI and ReDoc) from your code and type annotations, making it easier for teams to collaborate.
-3. **Type Safety**: Leveraging Pydantic, FastAPI provides automatic request validation and clear error messages, reducing the likelihood of runtime errors.
-4. **Asynchronous Support**: Native support for async/await patterns allows your API to handle multiple requests efficiently while waiting for AI model responses.
-5. **WebSocket Support**: For streaming AI responses or building real-time applications, FastAPI provides first-class WebSocket support.
-
-## Learn More
-
-Beyond this README, [this tutorial](https://fastapi.tiangolo.com/tutorial/) shows you how to use FastAPI with most of its features, step by step. 
+---
 
 ## Quick Start
 
-1. Clone repository
-    ```bash
-   git clone https://github.com/daveebbelaar/fastapi-tutorial.git
-   ```
+### 1. Clone and Setup
 
-2. Install dependencies:
-   ```bash
-   uv sync
-   ```
-
-3. Run the application:
-   ```bash
-   cd app
-   uvicorn main:app --reload
-   ```
-
-3. Access your API:
-   - API endpoints: http://localhost:8000/events
-   - Interactive docs: http://localhost:8000/docs
-
-### About Uvicorn
-
-Uvicorn is an ASGI server that actually runs your FastAPI application. While FastAPI defines your API structure and logic, Uvicorn is the server that handles HTTP connections and serves your application. 
-
-Think of FastAPI as the blueprint for your API, and Uvicorn as the engine that powers it.
-
-The command `uvicorn main:app --reload` means:
-- `main`: Use the file named `main.py`
-- `:app`: Look for a variable named `app` within that file
-- `--reload`: Automatically restart the server when you change your code (useful during development)
-
-### Default Port
-
-By default, Uvicorn runs on port 8000. This means:
-- Your API will be accessible at `http://localhost:8000`
-- `localhost` refers to your own computer
-- `8000` is the "door" or port number through which requests can access your API
-
-You can change this with the `--port` flag if needed:
 ```bash
-uvicorn main:app --port 5000
+git clone https://github.com/RayanDesigns/fastapi-withOpenaiAPI.git
+cd fastapi-withOpenaiAPI
+git checkout feature/sprint-3-ai-service
 ```
 
-## Structure
+### 2. Environment Configuration
 
-- `main.py`: Application entry point that creates the FastAPI app
-- `router.py`: Routes incoming requests to the appropriate endpoint handlers
-- `endpoint.py`: Defines data models and endpoint logic for processing events
-
-This modular approach keeps your code organized as your AI application grows in complexity.
-
-> For comprehensive documentation, visit the [FastAPI official docs](https://fastapi.tiangolo.com/).
-
-## Code Walkthrough
-
-Let's examine how our three files work together to create a clean API for processing AI events.
-
-### 1. `main.py` - Application Entry Point
-
-```python
-from fastapi import FastAPI
-from router import router as process_router
-
-app = FastAPI()
-app.include_router(process_router)
+```bash
+cp .env.example .env
 ```
 
-This file:
+Edit `.env` and add your OpenAI API key:
 
-- Creates the main FastAPI application instance
-- Imports and includes our router
-- Serves as the entry point for Uvicorn to run our application
-
-### 2. `router.py` - Request Routing
-
-```python
-from fastapi import APIRouter
-import endpoint
-
-router = APIRouter()
-router.include_router(endpoint.router, prefix="/events", tags=["events"])
+```env
+OPENAI_API_KEY=sk-your-actual-api-key-here
+LLM_MODEL=gpt-4o
+BEARER_TOKEN=your-secret-token
 ```
 
-This file:
+Leave `BEARER_TOKEN` empty to disable authentication in development.
 
-- Creates a main router
-- Imports our endpoint module with its router
-- Adds the endpoint router with the prefix `/events`
-- Uses tags for documentation organization
-- Routes all requests that start with `/events` to our endpoint
+### 3. Install Dependencies
 
-### 3. `endpoint.py` - Core Logic
+**Option A -- pip:**
 
-```python
-import json
-from http import HTTPStatus
-
-from fastapi import APIRouter
-from pydantic import BaseModel
-from starlette.responses import Response
-
-router = APIRouter()
-
-
-class EventSchema(BaseModel):
-    """Event Schema"""
-
-    event_id: str
-    event_type: str
-    event_data: dict
-
-
-@router.post("/", dependencies=[])
-def handle_event(
-    data: EventSchema,
-) -> Response:
-    print(data)
-
-    # Return acceptance response
-    return Response(
-        content=json.dumps({"message": "Data received!"}),
-        status_code=HTTPStatus.ACCEPTED,
-    )
+```bash
+pip install fastapi uvicorn pydantic pydantic-settings openai httpx PyMuPDF python-dotenv python-multipart
 ```
 
-This file:
+**Option B -- uv (recommended):**
 
-- Defines a Pydantic model `EventSchema` that validates incoming data
-- Creates an endpoint router
-- Defines a POST handler at `/` (which becomes `/events/` when mounted in router.py)
-- Accepts and validates incoming data against our schema
-- Returns a JSON response with HTTP status code 202 (Accepted)
-
-#### Key Components:
-
-1. **Pydantic Model**: `EventSchema` defines the structure of valid incoming data:
-   - `event_id`: A unique identifier for the event
-   - `event_type`: The category or type of event
-   - `event_data`: A dictionary containing the actual event data
-
-2. **Router Decorator**: `@router.post("/")` creates a POST endpoint at the base path
-
-3. **Request Handler**: `handle_event()` processes incoming data:
-   - FastAPI automatically validates incoming JSON against `EventSchema`
-   - Invalid data will be rejected with appropriate error messages
-   - Valid data is passed to our function where we can process it
-
-4. **Response**: Returns a simple JSON confirmation with status code 202 (Accepted)
-
-## Sync vs. Async Endpoints in FastAPI
-
-FastAPI supports both synchronous and asynchronous request handlers.
-
-### Synchronous Endpoints
-
-Synchronous endpoints use standard Python functions and block the server while processing:
-
-```python
-@router.post("/sync")
-def sync_endpoint(data: EventSchema):
-    # This blocks the server until completion
-    result = process_data(data)
-    return {"result": result}
+```bash
+pip install uv
+uv sync
 ```
 
-**When to use:** For quick operations that complete rapidly (under 1 second)
+### 4. Run the Service
 
-### Asynchronous Endpoints
-
-Asynchronous endpoints use Python's `async`/`await` syntax and don't block the server:
-
-```python
-@router.post("/async")
-async def async_endpoint(data: EventSchema):
-    # This doesn't block the server
-    result = await async_process_data(data)
-    return {"result": result}
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**When to use:** For operations that:
+### 5. Access API Documentation
 
-- Involve I/O operations (API calls, database queries)
-- Take longer to process (complex AI inference)
-- Need to handle many concurrent requests
+| Resource | URL |
+|----------|-----|
+| Swagger UI | http://localhost:8000/docs |
+| ReDoc | http://localhost:8000/redoc |
+| Health Check | http://localhost:8000/api/v1/analysis/health |
 
-### Key Points
+---
 
-- FastAPI is designed for async and performs best with async handlers
-- You can mix sync and async endpoints in the same application
-- For AI applications with external API calls or long processing, async is strongly recommended
-- With sync functions, you need more workers to handle the same number of concurrent requests
+## API Endpoints
 
-## Testing Your Endpoint
+| Method | Endpoint | User Story | Description |
+|--------|----------|------------|-------------|
+| `POST` | `/api/v1/analysis/trigger` | US-20 | Trigger AI analysis for a claim |
+| `GET` | `/api/v1/analysis/{claim_id}` | US-21, US-22 | Get AI analysis results |
+| `GET` | `/api/v1/responses/{claim_id}/draft` | US-23 | Get AI draft response |
+| `PUT` | `/api/v1/responses/{claim_id}/draft` | US-24 | Edit AI draft response |
+| `GET` | `/api/v1/analysis/health` | -- | Service health check |
 
-To quickly test your FastAPI endpoint, you can use the `requests.py` file
+---
 
-### What This Script Does
+## Integration Guide (for Frontend + Firebase Team)
 
-1. Sets up the endpoint URL where your FastAPI server is running
-2. Creates a sample event with:
-   - A random UUID as the event ID
-   - A test event type
-   - A dictionary of sample event data
-3. Sends a POST request to your endpoint
-4. Prints the response status code and body
+### When Examiner Picks a Claim -> Trigger Analysis
 
-## Understanding API Methods: GET vs POST
+```javascript
+// POST /api/v1/analysis/trigger
+const response = await fetch('http://localhost:8000/api/v1/analysis/trigger', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer your-secret-token'
+  },
+  body: JSON.stringify({
+    claim_id: 'CLM-001',
+    patient_info: {
+      first_name: 'Mohammed',
+      last_name: 'Al-Qahtani',
+      date_of_birth: '1990-01-15'
+    },
+    treatment_type: 'Physiotherapy',
+    policy_plan_id: 'PP-BASIC',
+    medical_report_url: 'https://firebasestorage.googleapis.com/...medical-report.pdf',
+    policy_document_url: 'https://firebasestorage.googleapis.com/...policy-plan.pdf',
+    examiner_id: 'EX-001'
+  })
+});
 
-If you're new to APIs, think of the difference between GET and POST as similar to the difference between reading and writing.
-
-### GET: Asking for Information
-
-A GET request is like asking someone a question. When you use GET in an API, you're simply requesting information without changing anything. 
-
-For example, checking the weather on a website is a GET request - you're just asking "What's the weather today?" without changing the weather itself.
-
-In FastAPI, you'd use GET when you want to retrieve information:
-
-```python
-@router.get("/status")
-def get_status():
-    return {"status": "online"}
+// Response (HTTP 202 Accepted):
+// {
+//   "analysis_id": "uuid",
+//   "claim_id": "CLM-001",
+//   "status": "pending",
+//   "message": "AI analysis has been triggered successfully"
+// }
 ```
 
-This creates an endpoint that tells users about your API's status when they visit `/status`.
+### When Examiner Views Claim Details -> Get Analysis Results
 
-### POST: Sending Information to Process
+```javascript
+// GET /api/v1/analysis/{claim_id}
+// Poll this endpoint until status is "completed" or "failed"
+const response = await fetch('http://localhost:8000/api/v1/analysis/CLM-001', {
+  headers: { 'Authorization': 'Bearer your-secret-token' }
+});
 
-A POST request is like filling out and submitting a form. When you use POST, you're sending data that needs to be processed or stored.
-
-Imagine ordering food through a delivery app. You're not just asking a question; you're submitting information (your order) that will change something on the server (create a new order in their system).
-
-In FastAPI, you'd use POST when receiving data for your AI to process:
-
-```python
-@router.post("/analyze")
-def analyze_text(data: TextSchema):
-    # Process the text with your AI model
-    return {"sentiment": "positive"}
+// Response includes:
+// - coverage_decision: "covered" | "not_covered" | "partial"
+// - confidence_score: 0.0 to 1.0
+// - applicable_clauses: [{ clause_id, clause_text, relevance }]
+// - reasoning: "Detailed AI justification"
+// - draft_response: "Generated message for claimant"
+// - disclaimer: "This is an AI-assisted analysis..."
 ```
 
-This creates an endpoint that accepts text data, processes it, and returns an analysis.
+### When Examiner Wants to View Draft -> Get Draft Response
 
-### When to Use Each in AI Applications
+```javascript
+// GET /api/v1/responses/{claim_id}/draft
+const response = await fetch('http://localhost:8000/api/v1/responses/CLM-001/draft', {
+  headers: { 'Authorization': 'Bearer your-secret-token' }
+});
 
-For your AI applications, use GET when users are retrieving information without changing state - like checking if a model is available or retrieving previously generated results.
-
-Use POST when users are sending data that your AI needs to process - like text for summarization, images for classification, or parameters for generation.
-
-## Securing Your FastAPI Endpoint with Bearer Tokens
-
-Bearer token authentication is the recommended approach for modern APIs, including AI applications. It's more standardized and flexible than simple API keys.
-
-### Implementing Bearer Token Authentication
-
-```python
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-router = APIRouter()
-
-# Create security scheme
-security = HTTPBearer()
-
-# In production, store this in environment variables
-API_TOKEN = "your-secret-token"
-
-@router.post("/")
-def handle_event(
-    data: EventSchema,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    # Validate the token
-    if credentials.credentials != API_TOKEN:
-        raise HTTPException(
-            status_code=401, 
-            detail="Invalid authentication token"
-        )
-    
-    # Process the valid request
-    return {"message": "Data received!"}
+// Response:
+// {
+//   "claim_id": "CLM-001",
+//   "original_draft": "AI-generated text...",
+//   "current_draft": "Same as original or edited version",
+//   "is_edited": false,
+//   "generated_at": "2026-04-26T10:00:00",
+//   "last_edited_at": null
+// }
 ```
 
-### Sending Authenticated Requests
+### When Examiner Edits the Draft -> Update Draft Response
 
-```python
-import requests
-import json
+```javascript
+// PUT /api/v1/responses/{claim_id}/draft
+const response = await fetch('http://localhost:8000/api/v1/responses/CLM-001/draft', {
+  method: 'PUT',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer your-secret-token'
+  },
+  body: JSON.stringify({
+    edited_response: 'Dear patient, after careful review of your claim...',
+    examiner_id: 'EX-001'
+  })
+});
 
-# API endpoint
-url = "http://localhost:8000/events/"
-
-# Sample event data
-event_data = {
-    "event_id": "123e4567-e89b-12d3-a456-426614174000",
-    "event_type": "test_event",
-    "event_data": {"message": "Hello AI world!"}
-}
-
-# Send POST request with Bearer token
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer your-secret-token"
-}
-
-response = requests.post(
-    url=url,
-    data=json.dumps(event_data),
-    headers=headers
-)
+// Response:
+// {
+//   "claim_id": "CLM-001",
+//   "current_draft": "Dear patient, after careful review...",
+//   "is_edited": true,
+//   "last_edited_at": "2026-04-26T11:30:00",
+//   "last_edited_by": "EX-001"
+// }
 ```
 
-### Why Bearer Tokens?
+---
 
-Bearer tokens have become the standard for API authentication because they:
+## Running Tests
 
-1. Follow OAuth 2.0 specifications used by major APIs worldwide
-2. Can be easily extended to JWT (JSON Web Tokens) for more advanced use cases
-3. Are supported by all API clients and languages
-4. Work well with token management systems
+```bash
+# Install dev dependencies
+pip install pytest pytest-asyncio pytest-cov anyio
 
-For production applications, consider using JWT tokens which allow you to include expiration times and additional claims in the token itself.
+# Run all tests
+pytest -v
 
-For more advanced authentication options, refer to the [FastAPI Security documentation](https://fastapi.tiangolo.com/tutorial/security/).
+# Run with coverage report
+pytest --cov=app --cov-report=term-missing -v
+
+# Run specific test file
+pytest tests/test_analysis.py -v
+```
+
+---
+
+## Docker Deployment
+
+### Build and Run
+
+```bash
+docker build -t watheeq-ai .
+docker run -p 8000:8000 --env-file .env watheeq-ai
+```
+
+### Using Docker Compose
+
+```bash
+docker-compose up --build
+```
+
+---
+
+## Firebase Integration (Optional -- Mode A)
+
+By default, this service uses in-memory storage (Mode B -- stateless). To enable direct Firestore access:
+
+1. Install Firebase Admin SDK:
+   ```bash
+   pip install firebase-admin
+   ```
+
+2. Update `.env`:
+   ```env
+   FIREBASE_ENABLED=true
+   FIREBASE_PROJECT_ID=watheeq-ai
+   FIREBASE_CREDENTIALS_PATH=./firebase-credentials.json
+   ```
+
+3. Replace in-memory store calls in `app/services/store.py` with Firestore operations. Each function in `store.py` includes commented Firestore equivalents.
+
+---
+
+## Project Structure
+
+```
+watheeq-ai-service/
+├── app/
+│   ├── main.py                    # FastAPI app + CORS + startup config
+│   ├── config.py                  # Environment config (pydantic-settings)
+│   ├── dependencies.py            # Shared dependencies (auth)
+│   ├── routers/                   # API layer -- validation ONLY
+│   │   ├── analysis.py            # US-20, US-21, US-22 endpoints
+│   │   └── responses.py           # US-23, US-24 endpoints
+│   ├── schemas/                   # Pydantic models -- request/response
+│   │   ├── analysis.py            # Analysis schemas
+│   │   └── responses.py           # Response schemas
+│   ├── services/                  # Business logic (process_event pattern)
+│   │   ├── analysis_service.py    # AI analysis orchestration (THE CORE)
+│   │   ├── pdf_service.py         # PDF text extraction
+│   │   ├── llm_service.py         # LLM API integration (OpenAI)
+│   │   ├── response_service.py    # Draft response generation + editing
+│   │   └── store.py               # In-memory data store
+│   ├── models/                    # Internal domain models
+│   │   ├── analysis.py            # AnalysisRecord dataclass
+│   │   └── response.py            # DraftResponseRecord dataclass
+│   └── utils/                     # Shared utilities
+│       ├── prompts.py             # LLM prompt templates
+│       └── exceptions.py          # Custom exception classes
+├── tests/                         # Pytest test suite
+│   ├── conftest.py                # Shared fixtures
+│   ├── test_analysis.py           # Analysis endpoint tests
+│   ├── test_responses.py          # Response endpoint tests
+│   ├── test_llm_service.py        # Service layer tests
+│   └── test_auth.py               # Authentication tests
+├── .env.example                   # Environment variables template
+├── pyproject.toml                 # Dependencies
+├── Dockerfile                     # Container deployment
+├── docker-compose.yml             # Local development
+└── README.md                      # This file
+```
+
+---
+
+## User Stories Implemented
+
+| ID | Title | Priority | Story Points | Status |
+|----|-------|----------|-------------|--------|
+| US-20 | Automatic AI Analysis Trigger | Must Have | 5 | Implemented |
+| US-21 | AI Claim Analysis | Must Have | 19 | Implemented |
+| US-22 | AI Coverage Decision View | Must Have | 7 | Implemented |
+| US-23 | AI Draft Response Generation | Should Have | 11 | Implemented |
+| US-24 | Draft Response Editing | Should Have | 3 | Implemented |
+
+---
+
+## Non-Functional Requirements
+
+| ID | Requirement | Implementation |
+|----|-------------|----------------|
+| NFR-01 | 90%+ clause matching accuracy | Structured JSON output + careful prompt engineering |
+| NFR-02 | Recovery within 180s | Docker auto-restart + health checks |
+| NFR-03 | PDF processing < 10s for 20MB | PyMuPDF (fast C-based extraction) |
+| NFR-05 | Role-based access | Bearer token authentication |
+| NFR-08 | 99% LLM API success rate | Exponential backoff retry logic (3 attempts) |
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENAI_API_KEY` | Yes | -- | OpenAI API key |
+| `LLM_MODEL` | No | `gpt-4o` | LLM model to use |
+| `LLM_TEMPERATURE` | No | `0.1` | LLM temperature (lower = more consistent) |
+| `LLM_MAX_TOKENS` | No | `4000` | Maximum response tokens |
+| `FIREBASE_ENABLED` | No | `false` | Enable Firestore integration |
+| `FIREBASE_PROJECT_ID` | No | -- | Firebase project ID |
+| `FIREBASE_CREDENTIALS_PATH` | No | -- | Path to Firebase credentials JSON |
+| `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated allowed origins |
+| `BEARER_TOKEN` | No | -- | Auth token (empty = auth disabled) |
+| `MAX_PDF_SIZE_MB` | No | `20` | Maximum PDF file size in MB |
+| `ANALYSIS_TIMEOUT_SECONDS` | No | `60` | Analysis timeout in seconds |
+| `SERVICE_HOST` | No | `0.0.0.0` | Service bind host |
+| `SERVICE_PORT` | No | `8000` | Service bind port |
+| `API_VERSION` | No | `v1` | API version prefix |

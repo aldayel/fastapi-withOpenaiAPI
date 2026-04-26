@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  watheeq-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: watheeq-ai-service
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8000/api/v1/analysis/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ==========================================================================
+  # PRODUCTION UPGRADE: Add Redis + Celery for async task processing
+  # ==========================================================================
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: watheeq-redis
+  #   ports:
+  #     - "6379:6379"
+  #   restart: unless-stopped
+  #
+  # celery-worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: watheeq-celery-worker
+  #   command: celery -A app.celery_app worker --loglevel=info
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped

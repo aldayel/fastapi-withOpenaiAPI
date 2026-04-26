@@ -1,0 +1,291 @@
+"""
+Watheeq AI Service — Analysis Service (THE CORE)
+
+Orchestrates the full AI claim analysis pipeline (US-20, US-21):
+  1. Extract text from medical report PDF
+  2. Extract text from policy document PDF
+  3. Build structured prompt
+  4. Call LLM API
+  5. Parse and validate LLM response
+  6. Generate draft response (US-23)
+  7. Store results
+
+This is the process_event() abstraction — all business logic lives here,
+NOT in the router/endpoint layer.
+
+PRODUCTION UPGRADE — For high-volume processing:
+    Replace BackgroundTasks with Celery + Redis:
+
+    from celery import Celery
+    celery_app = Celery('watheeq', broker='redis://localhost:6379/0')
+
+    @celery_app.task
+    def process_claim_analysis_task(analysis_id, claim_data_dict):
+        import asyncio
+        asyncio.run(process_claim_analysis(analysis_id, claim_data_dict))
+"""
+
+import logging
+import time
+from datetime import datetime
+from typing import Optional
+
+from app.config import settings
+from app.models.analysis import AnalysisRecord, StoredClause
+from app.schemas.analysis import AnalysisTriggerRequest
+from app.services import llm_service, pdf_service, response_service
+from app.services.store import get_analysis, get_analysis_by_claim, save_analysis
+from app.utils.exceptions import (
+    AnalysisNotFoundError,
+    LLMResponseParsingError,
+    LLMServiceError,
+    PDFDownloadError,
+    PDFExtractionError,
+)
+from app.utils.prompts import CLAIM_ANALYSIS_SYSTEM_PROMPT, build_analysis_prompt
+
+logger = logging.getLogger(__name__)
+
+
+async def process_claim_analysis(
+    analysis_id: str,
+    claim_data: AnalysisTriggerRequest,
+) -> None:
+    """
+    Core AI analysis pipeline — the process_event() abstraction.
+
+    This function is called as a background task (FastAPI BackgroundTasks).
+    It orchestrates the entire analysis workflow and updates the store
+    at each stage for status tracking.
+
+    Args:
+        analysis_id: Unique identifier for this analysis run.
+        claim_data: Validated request data from the trigger endpoint.
+    """
+    start_time = time.time()
+
+    # Initialize the analysis record as "processing"
+    record = AnalysisRecord(
+        analysis_id=analysis_id,
+        claim_id=claim_data.claim_id,
+        examiner_id=claim_data.examiner_id,
+        status="processing",
+        patient_info=claim_data.patient_info.model_dump(),
+        treatment_type=claim_data.treatment_type,
+        policy_plan_id=claim_data.policy_plan_id,
+        ai_model_used=settings.LLM_MODEL,
+        created_at=datetime.utcnow(),
+    )
+    save_analysis(analysis_id, record.to_dict())
+
+    try:
+        # =====================================================================
+        # Step 1: Extract text from medical report PDF
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 1: Extracting medical report text...")
+        medical_text = await pdf_service.extract_text(
+            claim_data.medical_report_url
+        )
+        logger.info(
+            f"[{analysis_id}] Medical report extracted: "
+            f"{len(medical_text)} characters"
+        )
+
+        # =====================================================================
+        # Step 2: Extract text from policy document PDF
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 2: Extracting policy document text...")
+        policy_text = await pdf_service.extract_text(
+            claim_data.policy_document_url
+        )
+        logger.info(
+            f"[{analysis_id}] Policy document extracted: "
+            f"{len(policy_text)} characters"
+        )
+
+        # =====================================================================
+        # Step 3: Build structured prompt
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 3: Building analysis prompt...")
+        user_prompt = build_analysis_prompt(
+            patient_info=claim_data.patient_info.model_dump(),
+            treatment_type=claim_data.treatment_type,
+            medical_report_text=medical_text,
+            policy_document_text=policy_text,
+        )
+
+        # =====================================================================
+        # Step 4: Call LLM API
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 4: Calling LLM API...")
+        llm_response = await llm_service.analyze(
+            user_prompt=user_prompt,
+            system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
+        )
+        logger.info(f"[{analysis_id}] LLM response received")
+
+        # =====================================================================
+        # Step 5: Parse and validate LLM response
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 5: Parsing LLM response...")
+        parsed = _parse_llm_response(llm_response)
+
+        # =====================================================================
+        # Step 6: Generate draft response (US-23)
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 6: Generating draft response...")
+        draft_text = await response_service.generate_draft(
+            claim_id=claim_data.claim_id,
+            patient_info=claim_data.patient_info.model_dump(),
+            treatment_type=claim_data.treatment_type,
+            coverage_decision=parsed["coverage_decision"],
+            reasoning=parsed["reasoning"],
+            applicable_clauses=parsed["applicable_clauses"],
+            flags=parsed.get("flags", []),
+        )
+
+        # =====================================================================
+        # Step 7: Store completed results
+        # =====================================================================
+        processing_time = time.time() - start_time
+        logger.info(
+            f"[{analysis_id}] Step 7: Storing results "
+            f"(processing time: {processing_time:.2f}s)..."
+        )
+
+        # Build clause objects
+        clauses = [
+            StoredClause(
+                clause_id=c.get("clause_id", ""),
+                clause_text=c.get("clause_text", ""),
+                relevance=c.get("relevance", ""),
+            )
+            for c in parsed.get("applicable_clauses", [])
+        ]
+
+        # Update the record with results
+        record.status = "completed"
+        record.coverage_decision = parsed["coverage_decision"]
+        record.confidence_score = parsed.get("confidence_score", 0.0)
+        record.applicable_clauses = clauses
+        record.reasoning = parsed.get("reasoning", "")
+        record.flags = parsed.get("flags", [])
+        record.recommended_action = parsed.get("recommended_action", "")
+        record.draft_response = draft_text
+        record.processing_time_seconds = round(processing_time, 2)
+        record.completed_at = datetime.utcnow()
+
+        save_analysis(analysis_id, record.to_dict())
+
+        logger.info(
+            f"[{analysis_id}] Analysis completed successfully. "
+            f"Decision: {parsed['coverage_decision']}, "
+            f"Confidence: {parsed.get('confidence_score', 'N/A')}"
+        )
+
+    except (PDFExtractionError, PDFDownloadError) as e:
+        _handle_failure(analysis_id, record, start_time, f"PDF processing error: {e}")
+    except (LLMServiceError, LLMResponseParsingError) as e:
+        _handle_failure(analysis_id, record, start_time, f"LLM error: {e}")
+    except Exception as e:
+        _handle_failure(analysis_id, record, start_time, f"Unexpected error: {e}")
+
+
+def _handle_failure(
+    analysis_id: str,
+    record: AnalysisRecord,
+    start_time: float,
+    error_message: str,
+) -> None:
+    """Update the analysis record to failed status."""
+    processing_time = time.time() - start_time
+    logger.error(f"[{analysis_id}] Analysis failed: {error_message}")
+
+    record.status = "failed"
+    record.error_message = error_message
+    record.processing_time_seconds = round(processing_time, 2)
+    record.completed_at = datetime.utcnow()
+
+    save_analysis(analysis_id, record.to_dict())
+
+
+def _parse_llm_response(response: dict) -> dict:
+    """
+    Parse and validate the structured LLM response.
+
+    Ensures all required fields are present and have valid values.
+
+    Args:
+        response: Raw parsed JSON from the LLM.
+
+    Returns:
+        Validated response dictionary.
+
+    Raises:
+        LLMResponseParsingError: If required fields are missing or invalid.
+    """
+    # Validate coverage_decision
+    coverage_decision = response.get("coverage_decision", "").lower()
+    valid_decisions = {"covered", "not_covered", "partial"}
+    if coverage_decision not in valid_decisions:
+        raise LLMResponseParsingError(
+            f"Invalid coverage_decision: '{coverage_decision}'. "
+            f"Expected one of: {valid_decisions}"
+        )
+
+    # Validate confidence_score
+    confidence_score = response.get("confidence_score")
+    if confidence_score is not None:
+        try:
+            confidence_score = float(confidence_score)
+            confidence_score = max(0.0, min(1.0, confidence_score))
+        except (TypeError, ValueError):
+            confidence_score = 0.0
+
+    # Validate applicable_clauses
+    clauses = response.get("applicable_clauses", [])
+    if not isinstance(clauses, list):
+        clauses = []
+
+    validated_clauses = []
+    for clause in clauses:
+        if isinstance(clause, dict):
+            validated_clauses.append({
+                "clause_id": clause.get("clause_id", "Unknown"),
+                "clause_text": clause.get("clause_text", ""),
+                "relevance": clause.get("relevance", ""),
+            })
+
+    # Validate recommended_action
+    recommended_action = response.get("recommended_action", "").lower()
+    valid_actions = {"approve", "reject", "request_more_info"}
+    if recommended_action not in valid_actions:
+        recommended_action = "request_more_info"
+
+    return {
+        "coverage_decision": coverage_decision,
+        "confidence_score": confidence_score,
+        "applicable_clauses": validated_clauses,
+        "reasoning": response.get("reasoning", "No reasoning provided"),
+        "flags": response.get("flags", []),
+        "recommended_action": recommended_action,
+    }
+
+
+def get_analysis_result(claim_id: str) -> dict:
+    """
+    Retrieve the analysis result for a claim (US-22).
+
+    Args:
+        claim_id: The claim to retrieve analysis for.
+
+    Returns:
+        Analysis data dictionary.
+
+    Raises:
+        AnalysisNotFoundError: If no analysis exists for the claim.
+    """
+    data = get_analysis_by_claim(claim_id)
+    if data is None:
+        raise AnalysisNotFoundError(claim_id)
+    return data
