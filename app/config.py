@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # --- LLM Configuration ---
     OPENAI_API_KEY: str = ""
-    LLM_MODEL: str = "gpt-4o"
+    LLM_MODEL: str = "gpt-4.1-mini"
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 4000
 
