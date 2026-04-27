@@ -18,22 +18,25 @@ RUN pip install --no-cache-dir pip --upgrade && \
     uvicorn[standard] \
     pydantic \
     pydantic-settings \
-    openai \
+    google-genai \
+    firebase-admin \
     httpx \
     PyMuPDF \
     python-dotenv \
     python-multipart
 
 # Copy application code
-COPY . .
+COPY app/ ./app/
 
-# Expose the service port
-EXPOSE 8000
+# Copy Firebase credentials
+COPY firebase-credentials.json ./firebase-credentials.json
+
+# Cloud Run sets PORT env var; default to 8080
+ENV PORT=8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; r = httpx.get('http://localhost:8000/api/v1/analysis/health'); r.raise_for_status()" || exit 1
+    CMD python -c "import httpx; r = httpx.get(f'http://localhost:{__import__(\"os\").environ.get(\"PORT\", 8080)}/api/v1/analysis/health'); r.raise_for_status()" || exit 1
 
-# Run the application
-# Use --workers for production (e.g., --workers 4)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application — Cloud Run requires 0.0.0.0:$PORT
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
