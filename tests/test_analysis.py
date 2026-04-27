@@ -24,7 +24,7 @@ async def test_health_check(client):
     data = response.json()
     assert data["status"] == "healthy"
     assert data["version"] == "1.0.0"
-    assert data["llm_provider"] == "openai"
+    assert data["llm_provider"] == "google-gemini"
     assert "llm_model" in data
 
 

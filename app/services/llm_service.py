@@ -1,11 +1,13 @@
 """
-Watheeq AI Service — LLM Integration Service
+Watheeq AI Service — LLM Integration Service (Gemini 2.5 Flash via OpenAI SDK)
 
-Handles all communication with the OpenAI API (or compatible LLM providers).
+Handles all communication with the LLM API.
+Uses the OpenAI-compatible SDK to call Gemini 2.5 Flash model.
 Implements retry logic with exponential backoff for NFR-08 (99% API success rate).
 
 Key design decisions:
-  - Uses AsyncOpenAI for non-blocking API calls
+  - Uses openai SDK for API compatibility and reliability
+  - Gemini 2.5 Flash model via OpenAI-compatible endpoint
   - Structured JSON output via response_format for reliable parsing
   - Low temperature (0.1) for consistent, deterministic analysis
   - Configurable model and parameters via environment variables
@@ -16,23 +18,54 @@ import logging
 import asyncio
 from typing import Optional
 
-from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+from openai import OpenAI
 
 from app.config import settings
 from app.utils.exceptions import LLMServiceError, LLMResponseParsingError
 
 logger = logging.getLogger(__name__)
 
-# Initialize the async OpenAI client
-_client: Optional[AsyncOpenAI] = None
+# Initialize the OpenAI client (lazy)
+_client: Optional[OpenAI] = None
 
 
-def _get_client() -> AsyncOpenAI:
-    """Get or create the AsyncOpenAI client (lazy initialization)."""
+def _get_client() -> OpenAI:
+    """Get or create the OpenAI client (lazy initialization)."""
     global _client
     if _client is None:
-        _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        _client = OpenAI()  # Uses OPENAI_API_KEY and base_url from env
     return _client
+
+
+def _call_llm_json(system_prompt: str, user_prompt: str) -> str:
+    """Synchronous LLM call expecting JSON output."""
+    client = _get_client()
+    response = client.chat.completions.create(
+        model=settings.LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=settings.LLM_TEMPERATURE,
+        max_tokens=settings.LLM_MAX_TOKENS,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content
+
+
+def _call_llm_text(system_prompt: str, user_prompt: str) -> str:
+    """Synchronous LLM call expecting plain text output."""
+    client = _get_client()
+    response = client.chat.completions.create(
+        model=settings.LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,  # Slightly higher for more natural language
+        max_tokens=settings.LLM_MAX_TOKENS,
+    )
+    return response.choices[0].message.content
 
 
 async def analyze(
@@ -57,7 +90,6 @@ async def analyze(
         LLMServiceError: If the API call fails after all retries.
         LLMResponseParsingError: If the response cannot be parsed as JSON.
     """
-    client = _get_client()
     last_error = None
 
     for attempt in range(1, max_retries + 1):
@@ -67,61 +99,61 @@ async def analyze(
                 f"(model: {settings.LLM_MODEL})"
             )
 
-            response = await client.chat.completions.create(
-                model=settings.LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=settings.LLM_TEMPERATURE,
-                max_tokens=settings.LLM_MAX_TOKENS,
+            # Run synchronous SDK call in a thread pool to avoid blocking
+            content = await asyncio.to_thread(
+                _call_llm_json, system_prompt, user_prompt
             )
 
-            # Extract and parse the response content
-            content = response.choices[0].message.content
             if not content:
                 raise LLMResponseParsingError("LLM returned empty response")
 
+            # Strip markdown code fences if present (```json ... ```)
+            cleaned = content.strip()
+            if cleaned.startswith("```"):
+                # Remove opening fence (```json or ```)
+                first_newline = cleaned.index("\n")
+                cleaned = cleaned[first_newline + 1:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3].rstrip()
+
+            # Parse JSON from the response
             try:
-                parsed = json.loads(content)
+                parsed = json.loads(cleaned)
             except json.JSONDecodeError as e:
                 raise LLMResponseParsingError(
-                    f"LLM response is not valid JSON: {str(e)}"
+                    f"LLM response is not valid JSON: {str(e)}\n"
+                    f"Raw response: {content[:500]}"
                 )
 
             logger.info("LLM API call successful")
             return parsed
-
-        except (APITimeoutError, RateLimitError) as e:
-            # Transient errors — retry with exponential backoff
-            last_error = e
-            wait_time = 2 ** attempt  # 2, 4, 8 seconds
-            logger.warning(
-                f"LLM API transient error (attempt {attempt}/{max_retries}): {e}. "
-                f"Retrying in {wait_time}s..."
-            )
-            if attempt < max_retries:
-                await asyncio.sleep(wait_time)
-
-        except APIError as e:
-            # Non-transient API errors
-            last_error = e
-            logger.error(f"LLM API error: {e}")
-            if attempt < max_retries and e.status_code and e.status_code >= 500:
-                # Server errors may be transient — retry
-                wait_time = 2 ** attempt
-                await asyncio.sleep(wait_time)
-            else:
-                break
 
         except LLMResponseParsingError:
             raise
 
         except Exception as e:
             last_error = e
-            logger.error(f"Unexpected LLM error: {e}")
-            break
+            error_str = str(e).lower()
+
+            # Check for transient/retryable errors
+            is_transient = any(
+                keyword in error_str
+                for keyword in [
+                    "timeout", "rate", "503", "500",
+                    "overloaded", "unavailable", "resource_exhausted",
+                ]
+            )
+
+            if is_transient and attempt < max_retries:
+                wait_time = 2 ** attempt  # 2, 4, 8 seconds
+                logger.warning(
+                    f"LLM API transient error (attempt {attempt}/{max_retries}): "
+                    f"{e}. Retrying in {wait_time}s..."
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"LLM API error: {e}")
+                break
 
     raise LLMServiceError(
         f"LLM API call failed after {max_retries} attempts: {str(last_error)}"
@@ -149,7 +181,6 @@ async def generate_text(
     Raises:
         LLMServiceError: If the API call fails after all retries.
     """
-    client = _get_client()
     last_error = None
 
     for attempt in range(1, max_retries + 1):
@@ -159,47 +190,40 @@ async def generate_text(
                 f"(model: {settings.LLM_MODEL})"
             )
 
-            response = await client.chat.completions.create(
-                model=settings.LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,  # Slightly higher for more natural language
-                max_tokens=settings.LLM_MAX_TOKENS,
+            content = await asyncio.to_thread(
+                _call_llm_text, system_prompt, user_prompt
             )
 
-            content = response.choices[0].message.content
             if not content:
                 raise LLMServiceError("LLM returned empty text response")
 
             logger.info("LLM text generation successful")
             return content.strip()
 
-        except (APITimeoutError, RateLimitError) as e:
-            last_error = e
-            wait_time = 2 ** attempt
-            logger.warning(
-                f"LLM API transient error (attempt {attempt}/{max_retries}): {e}. "
-                f"Retrying in {wait_time}s..."
-            )
-            if attempt < max_retries:
-                await asyncio.sleep(wait_time)
-
-        except APIError as e:
-            last_error = e
-            logger.error(f"LLM API error: {e}")
-            if attempt < max_retries and e.status_code and e.status_code >= 500:
-                wait_time = 2 ** attempt
-                await asyncio.sleep(wait_time)
-            else:
-                break
-
         except Exception as e:
             last_error = e
-            logger.error(f"Unexpected LLM error: {e}")
-            break
+            error_str = str(e).lower()
+
+            is_transient = any(
+                keyword in error_str
+                for keyword in [
+                    "timeout", "rate", "503", "500",
+                    "overloaded", "unavailable", "resource_exhausted",
+                ]
+            )
+
+            if is_transient and attempt < max_retries:
+                wait_time = 2 ** attempt
+                logger.warning(
+                    f"LLM API transient error (attempt {attempt}/{max_retries}): "
+                    f"{e}. Retrying in {wait_time}s..."
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"LLM API error: {e}")
+                break
 
     raise LLMServiceError(
-        f"LLM text generation failed after {max_retries} attempts: {str(last_error)}"
+        f"LLM text generation failed after {max_retries} attempts: "
+        f"{str(last_error)}"
     )

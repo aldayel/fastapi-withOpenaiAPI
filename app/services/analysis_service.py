@@ -5,24 +5,14 @@ Orchestrates the full AI claim analysis pipeline (US-20, US-21):
   1. Extract text from medical report PDF
   2. Extract text from policy document PDF
   3. Build structured prompt
-  4. Call LLM API
+  4. Call Gemini LLM API
   5. Parse and validate LLM response
   6. Generate draft response (US-23)
-  7. Store results
+  7. Store results in Firestore (ai_analyses + ai_drafts collections)
+  8. Write aiDecision + aiMessage back to the claims collection
 
 This is the process_event() abstraction — all business logic lives here,
 NOT in the router/endpoint layer.
-
-PRODUCTION UPGRADE — For high-volume processing:
-    Replace BackgroundTasks with Celery + Redis:
-
-    from celery import Celery
-    celery_app = Celery('watheeq', broker='redis://localhost:6379/0')
-
-    @celery_app.task
-    def process_claim_analysis_task(analysis_id, claim_data_dict):
-        import asyncio
-        asyncio.run(process_claim_analysis(analysis_id, claim_data_dict))
 """
 
 import logging
@@ -34,7 +24,12 @@ from app.config import settings
 from app.models.analysis import AnalysisRecord, StoredClause
 from app.schemas.analysis import AnalysisTriggerRequest
 from app.services import llm_service, pdf_service, response_service
-from app.services.store import get_analysis, get_analysis_by_claim, save_analysis
+from app.services.store import (
+    get_analysis,
+    get_analysis_by_claim,
+    save_analysis,
+    update_claim_with_ai_result,
+)
 from app.utils.exceptions import (
     AnalysisNotFoundError,
     LLMResponseParsingError,
@@ -115,14 +110,14 @@ async def process_claim_analysis(
         )
 
         # =====================================================================
-        # Step 4: Call LLM API
+        # Step 4: Call Gemini LLM API
         # =====================================================================
-        logger.info(f"[{analysis_id}] Step 4: Calling LLM API...")
+        logger.info(f"[{analysis_id}] Step 4: Calling Gemini API...")
         llm_response = await llm_service.analyze(
             user_prompt=user_prompt,
             system_prompt=CLAIM_ANALYSIS_SYSTEM_PROMPT,
         )
-        logger.info(f"[{analysis_id}] LLM response received")
+        logger.info(f"[{analysis_id}] Gemini response received")
 
         # =====================================================================
         # Step 5: Parse and validate LLM response
@@ -145,7 +140,7 @@ async def process_claim_analysis(
         )
 
         # =====================================================================
-        # Step 7: Store completed results
+        # Step 7: Store completed results in ai_analyses collection
         # =====================================================================
         processing_time = time.time() - start_time
         logger.info(
@@ -176,6 +171,19 @@ async def process_claim_analysis(
         record.completed_at = datetime.utcnow()
 
         save_analysis(analysis_id, record.to_dict())
+
+        # =====================================================================
+        # Step 8: Write aiDecision + aiMessage to the claims collection
+        # =====================================================================
+        logger.info(
+            f"[{analysis_id}] Step 8: Updating claim {claim_data.claim_id} "
+            f"with aiDecision and aiMessage..."
+        )
+        update_claim_with_ai_result(
+            claim_id=claim_data.claim_id,
+            ai_decision=parsed["coverage_decision"],
+            ai_message=draft_text,
+        )
 
         logger.info(
             f"[{analysis_id}] Analysis completed successfully. "

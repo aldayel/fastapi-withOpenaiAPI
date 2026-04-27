@@ -95,7 +95,7 @@ async def health_check() -> HealthCheckResponse:
     return HealthCheckResponse(
         status="healthy",
         version="1.0.0",
-        llm_provider="openai",
+        llm_provider="google-gemini",
         llm_model=settings.LLM_MODEL,
     )
 

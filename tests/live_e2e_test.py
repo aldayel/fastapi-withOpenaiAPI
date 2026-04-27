@@ -21,7 +21,7 @@ import sys
 import httpx
 
 BASE_URL = "http://localhost:8000"
-AUTH_HEADER = {"Authorization": "Bearer your-secret-token"}
+AUTH_HEADER = {"Authorization": "Bearer watheeq-sprint3-token"}
 
 
 def encode_pdf_to_base64(file_path: str) -> str:

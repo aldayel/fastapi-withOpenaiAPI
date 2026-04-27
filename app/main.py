@@ -112,6 +112,7 @@ async def startup_event():
     """Log service startup configuration."""
     logger.info("=" * 60)
     logger.info("Watheeq AI Analysis Service starting up...")
+    logger.info(f"  LLM Provider:    Google Gemini")
     logger.info(f"  LLM Model:       {settings.LLM_MODEL}")
     logger.info(f"  LLM Temperature: {settings.LLM_TEMPERATURE}")
     firebase_status = "Enabled" if settings.FIREBASE_ENABLED else "Disabled (Mode B)"
