@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: watheeq-ai-service
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /api/v1/analysis/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FIREBASE_ENABLED
+        value: "true"
+      - key: FIREBASE_PROJECT_ID
+        value: "watheeqai-2"
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false
+      - key: LLM_MODEL
+        value: "gemini-2.5-flash"
+      - key: BEARER_TOKEN
+        sync: false
+      - key: PORT
+        value: "8080"

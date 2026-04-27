@@ -9,11 +9,15 @@ When Firebase is enabled, writes directly to Firestore collections:
 
 When Firebase is disabled, falls back to in-memory storage (dev/test mode).
 
-Design note: We use claim_id as the document ID for ai_analyses and ai_drafts
-to avoid needing Firestore composite indexes and to simplify lookups.
+Firebase credentials can be loaded from:
+  1. FIREBASE_CREDENTIALS_JSON env var (JSON string — for Render/Cloud Run)
+  2. FIREBASE_CREDENTIALS_PATH file path (for local dev)
 """
 
+import json
 import logging
+import os
+import tempfile
 import threading
 from typing import Dict, Optional
 
@@ -45,7 +49,11 @@ def _get_db():
             try:
                 firebase_admin.get_app()
             except ValueError:
-                cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
+                cred = _load_firebase_credentials()
+                if cred is None:
+                    logger.error("No Firebase credentials found")
+                    _firebase_initialized = True
+                    return None
                 firebase_admin.initialize_app(cred, {
                     "projectId": settings.FIREBASE_PROJECT_ID,
                 })
@@ -59,6 +67,34 @@ def _get_db():
             _db = None
 
     return _db
+
+
+def _load_firebase_credentials():
+    """
+    Load Firebase credentials from environment variable or file.
+
+    Priority:
+    1. FIREBASE_CREDENTIALS_JSON env var (JSON string)
+    2. FIREBASE_CREDENTIALS_PATH file path
+    """
+    # Option 1: JSON string in env var (for Render, Cloud Run, etc.)
+    creds_json = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")
+    if creds_json:
+        try:
+            creds_dict = json.loads(creds_json)
+            logger.info("Loaded Firebase credentials from FIREBASE_CREDENTIALS_JSON env var")
+            return credentials.Certificate(creds_dict)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Failed to parse FIREBASE_CREDENTIALS_JSON: {e}")
+
+    # Option 2: File path
+    creds_path = settings.FIREBASE_CREDENTIALS_PATH
+    if creds_path and os.path.exists(creds_path):
+        logger.info(f"Loaded Firebase credentials from file: {creds_path}")
+        return credentials.Certificate(creds_path)
+
+    logger.error("No Firebase credentials found (checked FIREBASE_CREDENTIALS_JSON env var and file path)")
+    return None
 
 
 # =============================================================================
@@ -90,7 +126,6 @@ def save_analysis(analysis_id: str, data: dict) -> None:
 
     if db is not None:
         try:
-            # Use claim_id as doc ID for easy lookup; store analysis_id inside
             db.collection("ai_analyses").document(claim_id).set(data, merge=True)
             logger.debug(f"Analysis {analysis_id} for claim {claim_id} saved to Firestore")
             return
@@ -110,7 +145,6 @@ def get_analysis(analysis_id: str) -> Optional[dict]:
     db = _get_db()
     if db is not None:
         try:
-            # Try direct lookup first (analysis_id might be claim_id)
             doc = db.collection("ai_analyses").document(analysis_id).get()
             if doc.exists:
                 return doc.to_dict()
@@ -182,7 +216,6 @@ def update_claim_with_ai_result(
             f"Firebase not enabled — cannot update claim {claim_id}. "
             "aiDecision and aiMessage stored in memory only."
         )
-        # Store in memory as a fallback
         with _analysis_lock:
             key = f"claim_update_{claim_id}"
             _analysis_store[key] = {

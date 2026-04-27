@@ -28,15 +28,16 @@ RUN pip install --no-cache-dir pip --upgrade && \
 # Copy application code
 COPY app/ ./app/
 
-# Copy Firebase credentials
-COPY firebase-credentials.json ./firebase-credentials.json
+# Copy Firebase credentials if present (for local/Cloud Run deployment)
+# On Render, credentials are passed via FIREBASE_CREDENTIALS_JSON env var
+COPY firebase-credentials.jso[n] ./
 
-# Cloud Run sets PORT env var; default to 8080
+# Default port (Render sets PORT env var automatically)
 ENV PORT=8080
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; r = httpx.get(f'http://localhost:{__import__(\"os\").environ.get(\"PORT\", 8080)}/api/v1/analysis/health'); r.raise_for_status()" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen(f'http://localhost:{__import__(\"os\").environ.get(\"PORT\", 8080)}/api/v1/analysis/health')" || exit 1
 
-# Run the application — Cloud Run requires 0.0.0.0:$PORT
+# Run the application
 CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
