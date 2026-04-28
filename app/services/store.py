@@ -199,7 +199,7 @@ def update_claim_with_ai_result(
     with the AI analysis results.
 
     Writes two new fields:
-      - aiDecision: "covered" | "not_covered" | "partial"
+      - aiDecision: "covered" | "not_covered"
       - aiMessage: The AI-generated draft response message
 
     Args:

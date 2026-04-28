@@ -34,7 +34,7 @@ When a Claims Examiner picks a claim for review, this service:
 1. **Ingests** the claim data (patient info, treatment type, medical report PDF)
 2. **Extracts** text from both the medical report and policy document PDFs
 3. **Analyzes** the claim against the policy using **Gemini 2.5 Flash** LLM
-4. **Determines** coverage status: `covered`, `not_covered`, or `partial`
+4. **Determines** coverage status: `covered` or `not_covered`
 5. **Identifies** applicable policy clauses with exact citations
 6. **Generates** a professional draft response message for the examiner to review/edit
 7. **Writes back** `aiDecision` and `aiMessage` to the claim document in Firestore
@@ -232,7 +232,7 @@ Authorization: Bearer watheeq-sprint3-token
 | `analysis_id` | string | UUID | Unique ID for this analysis run |
 | `claim_id` | string | — | The claim that was analyzed |
 | `status` | string | `pending`, `processing`, `completed`, `failed` | Current analysis status |
-| `coverage_decision` | string or null | `covered`, `not_covered`, `partial` | AI coverage determination |
+| `coverage_decision` | string or null | `covered`, `not_covered` | AI coverage determination |
 | `confidence_score` | float or null | 0.0 to 1.0 | AI confidence in the decision |
 | `applicable_clauses` | array or null | — | List of cited policy clauses |
 | `applicable_clauses[].clause_id` | string | — | Clause identifier (e.g., "ARTICLE 2") |
@@ -240,7 +240,7 @@ Authorization: Bearer watheeq-sprint3-token
 | `applicable_clauses[].relevance` | string | — | Why this clause applies |
 | `reasoning` | string or null | — | Detailed AI justification |
 | `flags` | array or null | — | Concerns flagged for manual review |
-| `recommended_action` | string or null | `approve`, `reject`, `request_more_info` | AI recommended next step |
+| `recommended_action` | string or null | `approve`, `reject` | AI recommended next step |
 | `draft_response` | string or null | — | AI-generated draft letter for the claimant |
 | `ai_model_used` | string or null | — | LLM model used (e.g., "gemini-2.5-flash") |
 | `processing_time_seconds` | float or null | — | Total processing time |
@@ -392,7 +392,7 @@ After the AI analysis completes, two fields are added to the existing claim docu
 
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
-| `aiDecision` | string | `"covered"`, `"not_covered"`, `"partial"` | The AI coverage determination |
+| `aiDecision` | string | `"covered"`, `"not_covered"` | The AI coverage determination |
 | `aiMessage` | string | — | The AI-generated draft response letter for the claimant |
 
 **Example:** After analysis, the claim document `2qzERAkeDSFegHcfnhL5` in the `claims` collection will have:
@@ -460,7 +460,7 @@ do {
 } while (result.status === "pending" || result.status === "processing");
 
 // Step 3: Display the result
-console.log(result.coverage_decision);  // "covered" | "not_covered" | "partial"
+console.log(result.coverage_decision);  // "covered" | "not_covered"
 console.log(result.reasoning);          // "Based on ARTICLE 2..."
 console.log(result.draft_response);     // "Dear Mohammed..."
 
@@ -503,7 +503,7 @@ FirebaseFirestore.instance
     final data = snapshot.data();
     if (data != null && data['aiDecision'] != null) {
       // AI analysis is complete
-      String decision = data['aiDecision'];   // "covered", "not_covered", "partial"
+      String decision = data['aiDecision'];   // "covered", "not_covered"
       String message = data['aiMessage'];     // Draft response letter
       // Update the UI
     }

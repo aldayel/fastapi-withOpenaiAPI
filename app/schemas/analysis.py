@@ -107,7 +107,7 @@ class AnalysisResultResponse(BaseModel):
     )
     coverage_decision: Optional[str] = Field(
         default=None,
-        description="AI coverage determination: covered | not_covered | partial",
+        description="AI coverage determination: covered | not_covered",
     )
     confidence_score: Optional[float] = Field(
         default=None, description="AI confidence score (0.0 to 1.0)"
@@ -124,7 +124,7 @@ class AnalysisResultResponse(BaseModel):
     )
     recommended_action: Optional[str] = Field(
         default=None,
-        description="AI recommended action: approve | reject | request_more_info",
+        description="AI recommended action: approve | reject",
     )
     draft_response: Optional[str] = Field(
         default=None, description="AI-generated draft response message for the claimant"

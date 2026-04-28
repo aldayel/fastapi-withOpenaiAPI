@@ -39,7 +39,7 @@ class AnalysisRecord:
     policy_plan_id: Optional[str] = None
 
     # AI results (populated on completion)
-    coverage_decision: Optional[str] = None  # covered | not_covered | partial
+    coverage_decision: Optional[str] = None  # covered | not_covered
     confidence_score: Optional[float] = None
     applicable_clauses: Optional[List[StoredClause]] = None
     reasoning: Optional[str] = None

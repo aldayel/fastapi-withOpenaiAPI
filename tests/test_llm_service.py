@@ -57,25 +57,18 @@ class TestParseLLMResponse:
         assert result["coverage_decision"] == "not_covered"
         assert result["recommended_action"] == "reject"
 
-    def test_valid_partial_response(self):
-        """Valid LLM response with 'partial' decision parses correctly."""
+    def test_partial_is_now_invalid(self):
+        """'partial' is no longer a valid decision — only covered/not_covered."""
         response = {
             "coverage_decision": "partial",
             "confidence_score": 0.65,
-            "applicable_clauses": [
-                {
-                    "clause_id": "Section 3.1",
-                    "clause_text": "Partial coverage for outpatient services.",
-                    "relevance": "Applies with limitations.",
-                }
-            ],
-            "reasoning": "Partially covered with co-pay requirements.",
-            "flags": ["Requires co-pay verification"],
-            "recommended_action": "request_more_info",
+            "applicable_clauses": [],
+            "reasoning": "Partially covered.",
+            "flags": [],
+            "recommended_action": "approve",
         }
-        result = _parse_llm_response(response)
-        assert result["coverage_decision"] == "partial"
-        assert result["recommended_action"] == "request_more_info"
+        with pytest.raises(LLMResponseParsingError):
+            _parse_llm_response(response)
 
     def test_invalid_coverage_decision(self):
         """Invalid coverage_decision raises LLMResponseParsingError."""
@@ -113,7 +106,7 @@ class TestParseLLMResponse:
         assert result["confidence_score"] == 0.0
 
     def test_invalid_recommended_action_defaults(self):
-        """Invalid recommended_action defaults to 'request_more_info'."""
+        """Invalid recommended_action defaults based on coverage decision."""
         response = {
             "coverage_decision": "covered",
             "confidence_score": 0.8,
@@ -122,7 +115,19 @@ class TestParseLLMResponse:
             "recommended_action": "invalid_action",
         }
         result = _parse_llm_response(response)
-        assert result["recommended_action"] == "request_more_info"
+        assert result["recommended_action"] == "approve"
+
+    def test_invalid_recommended_action_defaults_to_reject(self):
+        """Invalid recommended_action defaults to reject for not_covered."""
+        response = {
+            "coverage_decision": "not_covered",
+            "confidence_score": 0.8,
+            "applicable_clauses": [],
+            "reasoning": "Not covered.",
+            "recommended_action": "invalid_action",
+        }
+        result = _parse_llm_response(response)
+        assert result["recommended_action"] == "reject"
 
     def test_missing_optional_fields_have_defaults(self):
         """Missing optional fields get sensible defaults."""

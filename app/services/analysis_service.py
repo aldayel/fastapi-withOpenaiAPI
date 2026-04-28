@@ -234,7 +234,7 @@ def _parse_llm_response(response: dict) -> dict:
     """
     # Validate coverage_decision
     coverage_decision = response.get("coverage_decision", "").lower()
-    valid_decisions = {"covered", "not_covered", "partial"}
+    valid_decisions = {"covered", "not_covered"}
     if coverage_decision not in valid_decisions:
         raise LLMResponseParsingError(
             f"Invalid coverage_decision: '{coverage_decision}'. "
@@ -266,9 +266,10 @@ def _parse_llm_response(response: dict) -> dict:
 
     # Validate recommended_action
     recommended_action = response.get("recommended_action", "").lower()
-    valid_actions = {"approve", "reject", "request_more_info"}
+    valid_actions = {"approve", "reject"}
     if recommended_action not in valid_actions:
-        recommended_action = "request_more_info"
+        # Default based on coverage decision
+        recommended_action = "approve" if coverage_decision == "covered" else "reject"
 
     return {
         "coverage_decision": coverage_decision,
