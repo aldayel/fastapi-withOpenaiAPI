@@ -122,10 +122,6 @@ class AnalysisResultResponse(BaseModel):
         default=None,
         description="Concerns or items flagged for manual review",
     )
-    recommended_action: Optional[str] = Field(
-        default=None,
-        description="AI recommended action: approve | reject",
-    )
     draft_response: Optional[str] = Field(
         default=None, description="AI-generated draft response message for the claimant"
     )

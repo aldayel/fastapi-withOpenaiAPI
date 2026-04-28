@@ -183,9 +183,8 @@ Authorization: Bearer watheeq-sprint3-token
   ],
   "reasoning": "Based on ARTICLE 2 of the Gold Health Plan, Diagnostic Imaging is covered as it falls under the diagnostics category for out-patient medical treatment.",
   "flags": [],
-  "recommended_action": "approve",
   "draft_response": "Dear Mohammed Al-Qahtani,\n\nWe are pleased to inform you that your claim for Diagnostic Imaging has been reviewed and is covered under your Gold Health Plan...",
-  "ai_model_used": "gemini-2.5-flash",
+  "ai_model_used": "gemini-3.1-flash-lite-preview",
   "processing_time_seconds": 18.72,
   "created_at": "2026-04-27T19:37:32.589837",
   "completed_at": "2026-04-27T19:37:51.301059",
@@ -206,9 +205,8 @@ Authorization: Bearer watheeq-sprint3-token
   "applicable_clauses": null,
   "reasoning": null,
   "flags": null,
-  "recommended_action": null,
   "draft_response": null,
-  "ai_model_used": "gemini-2.5-flash",
+  "ai_model_used": "gemini-3.1-flash-lite-preview",
   "processing_time_seconds": null,
   "created_at": "2026-04-27T19:37:32.589837",
   "completed_at": null,
@@ -240,9 +238,8 @@ Authorization: Bearer watheeq-sprint3-token
 | `applicable_clauses[].relevance` | string | — | Why this clause applies |
 | `reasoning` | string or null | — | Detailed AI justification |
 | `flags` | array or null | — | Concerns flagged for manual review |
-| `recommended_action` | string or null | `approve`, `reject` | AI recommended next step |
 | `draft_response` | string or null | — | AI-generated draft letter for the claimant |
-| `ai_model_used` | string or null | — | LLM model used (e.g., "gemini-2.5-flash") |
+| `ai_model_used` | string or null | — | LLM model used (e.g., "gemini-3.1-flash-lite-preview") |
 | `processing_time_seconds` | float or null | — | Total processing time |
 | `created_at` | datetime or null | ISO 8601 | When analysis was triggered |
 | `completed_at` | datetime or null | ISO 8601 | When analysis completed |
@@ -367,7 +364,7 @@ GET /api/v1/analysis/health
   "status": "healthy",
   "version": "1.0.0",
   "llm_provider": "google-gemini",
-  "llm_model": "gemini-2.5-flash"
+  "llm_model": "gemini-3.1-flash-lite-preview"
 }
 ```
 
@@ -531,7 +528,7 @@ Edit `.env` and add your credentials:
 
 ```env
 GEMINI_API_KEY=your-gemini-api-key
-LLM_MODEL=gemini-2.5-flash
+LLM_MODEL=gemini-3.1-flash-lite-preview
 BEARER_TOKEN=your-secret-token
 FIREBASE_ENABLED=true
 FIREBASE_PROJECT_ID=watheeqai-2
@@ -646,7 +643,7 @@ watheeq-ai-service/
 | NFR-02 | Recovery within 180s | Docker auto-restart + health checks |
 | NFR-03 | PDF processing < 10s for 20MB | PyMuPDF (fast C-based extraction) |
 | NFR-05 | Role-based access | Bearer token authentication |
-| NFR-08 | 99% LLM API success rate | Model fallback chain (gemini-2.5-flash → gemini-2.5-flash-lite → gemini-2.0-flash-lite) + exponential backoff retry (3 attempts) |
+| NFR-08 | 99% LLM API success rate | Model fallback chain (gemini-3.1-flash-lite-preview → gemini-2.5-flash → gemini-2.5-flash-lite → gemini-2.0-flash-lite) + exponential backoff retry (3 attempts) |
 
 ---
 
@@ -655,7 +652,7 @@ watheeq-ai-service/
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `GEMINI_API_KEY` | **Yes** | — | Google Gemini API key |
-| `LLM_MODEL` | No | `gemini-2.5-flash` | Primary LLM model |
+| `LLM_MODEL` | No | `gemini-3.1-flash-lite-preview` | Primary LLM model |
 | `LLM_TEMPERATURE` | No | `0.1` | LLM temperature (lower = more consistent) |
 | `LLM_MAX_TOKENS` | No | `4000` | Maximum response tokens |
 | `FIREBASE_ENABLED` | No | `true` | Enable Firestore integration |

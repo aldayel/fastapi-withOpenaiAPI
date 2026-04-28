@@ -31,7 +31,7 @@ _client: Optional[genai.Client] = None
 
 # Fallback model chain: if the primary model is overloaded (503),
 # try lighter alternatives automatically.
-FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
+FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
 
 
 def _get_client() -> genai.Client:
@@ -132,8 +132,8 @@ async def analyze(
     Send a prompt to Gemini and return the parsed JSON response.
 
     Implements exponential backoff retry logic with automatic model fallback.
-    If the primary model (gemini-2.5-flash) is overloaded, automatically
-    falls back to lighter models (gemini-2.5-flash-lite, etc.).
+    If the primary model (gemini-3.1-flash-lite-preview) is overloaded, automatically
+    falls back to lighter models (gemini-2.5-flash, gemini-2.5-flash-lite, etc.).
 
     Args:
         user_prompt: The user message containing claim and policy data.

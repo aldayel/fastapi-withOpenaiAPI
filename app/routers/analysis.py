@@ -158,7 +158,6 @@ async def get_analysis_results(claim_id: str) -> AnalysisResultResponse:
         applicable_clauses=applicable_clauses,
         reasoning=data.get("reasoning"),
         flags=data.get("flags"),
-        recommended_action=data.get("recommended_action"),
         draft_response=data.get("draft_response"),
         ai_model_used=data.get("ai_model_used"),
         processing_time_seconds=data.get("processing_time_seconds"),

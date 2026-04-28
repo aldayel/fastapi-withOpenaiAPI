@@ -44,7 +44,6 @@ class AnalysisRecord:
     applicable_clauses: Optional[List[StoredClause]] = None
     reasoning: Optional[str] = None
     flags: Optional[List[str]] = None
-    recommended_action: Optional[str] = None
 
     # Draft response
     draft_response: Optional[str] = None
@@ -82,7 +81,6 @@ class AnalysisRecord:
             "applicable_clauses": clauses,
             "reasoning": self.reasoning,
             "flags": self.flags,
-            "recommended_action": self.recommended_action,
             "draft_response": self.draft_response,
             "ai_model_used": self.ai_model_used,
             "processing_time_seconds": self.processing_time_seconds,
@@ -126,7 +124,6 @@ class AnalysisRecord:
             applicable_clauses=clauses,
             reasoning=data.get("reasoning"),
             flags=data.get("flags"),
-            recommended_action=data.get("recommended_action"),
             draft_response=data.get("draft_response"),
             ai_model_used=data.get("ai_model_used"),
             processing_time_seconds=data.get("processing_time_seconds"),

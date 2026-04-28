@@ -35,13 +35,12 @@ class TestParseLLMResponse:
             ],
             "reasoning": "The treatment is covered under the basic plan.",
             "flags": [],
-            "recommended_action": "approve",
         }
         result = _parse_llm_response(response)
         assert result["coverage_decision"] == "covered"
         assert result["confidence_score"] == 0.95
         assert len(result["applicable_clauses"]) == 1
-        assert result["recommended_action"] == "approve"
+        assert "recommended_action" not in result
 
     def test_valid_not_covered_response(self):
         """Valid LLM response with 'not_covered' decision parses correctly."""
@@ -51,11 +50,10 @@ class TestParseLLMResponse:
             "applicable_clauses": [],
             "reasoning": "Treatment not listed in policy.",
             "flags": ["Treatment type not found in policy"],
-            "recommended_action": "reject",
         }
         result = _parse_llm_response(response)
         assert result["coverage_decision"] == "not_covered"
-        assert result["recommended_action"] == "reject"
+        assert "recommended_action" not in result
 
     def test_partial_is_now_invalid(self):
         """'partial' is no longer a valid decision — only covered/not_covered."""
@@ -65,7 +63,6 @@ class TestParseLLMResponse:
             "applicable_clauses": [],
             "reasoning": "Partially covered.",
             "flags": [],
-            "recommended_action": "approve",
         }
         with pytest.raises(LLMResponseParsingError):
             _parse_llm_response(response)
@@ -88,7 +85,6 @@ class TestParseLLMResponse:
             "confidence_score": 1.5,
             "applicable_clauses": [],
             "reasoning": "High confidence.",
-            "recommended_action": "approve",
         }
         result = _parse_llm_response(response)
         assert result["confidence_score"] == 1.0
@@ -100,46 +96,33 @@ class TestParseLLMResponse:
             "confidence_score": -0.5,
             "applicable_clauses": [],
             "reasoning": "Low confidence.",
-            "recommended_action": "approve",
         }
         result = _parse_llm_response(response)
         assert result["confidence_score"] == 0.0
-
-    def test_invalid_recommended_action_defaults(self):
-        """Invalid recommended_action defaults based on coverage decision."""
-        response = {
-            "coverage_decision": "covered",
-            "confidence_score": 0.8,
-            "applicable_clauses": [],
-            "reasoning": "Covered.",
-            "recommended_action": "invalid_action",
-        }
-        result = _parse_llm_response(response)
-        assert result["recommended_action"] == "approve"
-
-    def test_invalid_recommended_action_defaults_to_reject(self):
-        """Invalid recommended_action defaults to reject for not_covered."""
-        response = {
-            "coverage_decision": "not_covered",
-            "confidence_score": 0.8,
-            "applicable_clauses": [],
-            "reasoning": "Not covered.",
-            "recommended_action": "invalid_action",
-        }
-        result = _parse_llm_response(response)
-        assert result["recommended_action"] == "reject"
 
     def test_missing_optional_fields_have_defaults(self):
         """Missing optional fields get sensible defaults."""
         response = {
             "coverage_decision": "covered",
-            "recommended_action": "approve",
         }
         result = _parse_llm_response(response)
         assert result["confidence_score"] is None
         assert result["applicable_clauses"] == []
         assert result["reasoning"] == "No reasoning provided"
         assert result["flags"] == []
+
+    def test_recommended_action_in_llm_output_is_ignored(self):
+        """Even if the LLM returns recommended_action, it is not in the parsed result."""
+        response = {
+            "coverage_decision": "covered",
+            "confidence_score": 0.9,
+            "applicable_clauses": [],
+            "reasoning": "Covered.",
+            "flags": [],
+            "recommended_action": "approve",
+        }
+        result = _parse_llm_response(response)
+        assert "recommended_action" not in result
 
 
 # =============================================================================
@@ -266,8 +249,6 @@ class TestPDFService:
         doc.close()
 
         b64_string = base64.b64encode(pdf_bytes).decode("utf-8")
-        # Pad to ensure it's > 500 chars (treated as base64)
-        # The actual PDF bytes should already be > 500
 
         from app.services.pdf_service import extract_text
 

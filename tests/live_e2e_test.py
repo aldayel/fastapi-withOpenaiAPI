@@ -106,7 +106,6 @@ def main():
     print("\n[5/6] Analysis Results:")
     print(f"  Coverage Decision: {result.get('coverage_decision')}")
     print(f"  Confidence Score:  {result.get('confidence_score')}")
-    print(f"  Recommended Action: {result.get('recommended_action')}")
     print(f"  Processing Time:   {result.get('processing_time_seconds')}s")
     print(f"  AI Model Used:     {result.get('ai_model_used')}")
     print(f"  Disclaimer:        {result.get('disclaimer')}")

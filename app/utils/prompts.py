@@ -36,8 +36,7 @@ You MUST respond in the following JSON format ONLY:
     }
   ],
   "reasoning": "Detailed explanation of the coverage determination, referencing the cited clauses",
-  "flags": ["any concerns or items requiring manual review"],
-  "recommended_action": "approve" | "reject"
+  "flags": ["any concerns or items requiring manual review"]
 }
 
 IMPORTANT RULES:

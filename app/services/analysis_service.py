@@ -165,7 +165,6 @@ async def process_claim_analysis(
         record.applicable_clauses = clauses
         record.reasoning = parsed.get("reasoning", "")
         record.flags = parsed.get("flags", [])
-        record.recommended_action = parsed.get("recommended_action", "")
         record.draft_response = draft_text
         record.processing_time_seconds = round(processing_time, 2)
         record.completed_at = datetime.utcnow()
@@ -264,20 +263,12 @@ def _parse_llm_response(response: dict) -> dict:
                 "relevance": clause.get("relevance", ""),
             })
 
-    # Validate recommended_action
-    recommended_action = response.get("recommended_action", "").lower()
-    valid_actions = {"approve", "reject"}
-    if recommended_action not in valid_actions:
-        # Default based on coverage decision
-        recommended_action = "approve" if coverage_decision == "covered" else "reject"
-
     return {
         "coverage_decision": coverage_decision,
         "confidence_score": confidence_score,
         "applicable_clauses": validated_clauses,
         "reasoning": response.get("reasoning", "No reasoning provided"),
         "flags": response.get("flags", []),
-        "recommended_action": recommended_action,
     }
 
 
