@@ -7,7 +7,7 @@ Tests for Bearer token authentication (NFR-05).
 import pytest
 from unittest.mock import patch
 
-from app.services.store import save_draft
+from app.services.response_service import _save_draft_to_memory
 
 
 # =============================================================================
@@ -100,7 +100,7 @@ async def test_trigger_without_token(client):
 @patch("app.config.settings.BEARER_TOKEN", "test-secret-token")
 async def test_get_draft_with_valid_token(client):
     """Draft endpoint accepts valid bearer token."""
-    save_draft("CLM-AUTH-010", {
+    _save_draft_to_memory("CLM-AUTH-010", {
         "claim_id": "CLM-AUTH-010",
         "original_draft": "Test draft.",
         "current_draft": "Test draft.",

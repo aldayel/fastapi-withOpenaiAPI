@@ -1,13 +1,14 @@
 """
 Watheeq AI Service — Data Store (Firestore + In-Memory Fallback)
 
-Provides persistence for AI analysis results and draft responses.
-When Firebase is enabled, writes directly to Firestore collections:
-  - 'claims' collection: updates existing claim docs with aiDecision + aiMessage
-  - 'ai_analyses' collection: stores full AI analysis records (keyed by claim_id)
-  - 'ai_drafts' collection: stores draft response records (keyed by claim_id)
+STATELESS architecture — the AI service does NOT persist analysis results or drafts.
+It only writes 2 fields to the existing claim document in Firestore:
+  - aiDecision: "covered" | "not_covered"
+  - aiMessage: The AI's main reasoning/justification
 
-When Firebase is disabled, falls back to in-memory storage (dev/test mode).
+The service reads from:
+  - 'claims' collection: to get claim data (medical report URL, policy name)
+  - 'policies' collection: to get policy document URL
 
 Firebase credentials can be loaded from:
   1. FIREBASE_CREDENTIALS_JSON env var (JSON string — for Render/Cloud Run)
@@ -17,7 +18,6 @@ Firebase credentials can be loaded from:
 import json
 import logging
 import os
-import tempfile
 import threading
 from typing import Dict, Optional
 
@@ -98,90 +98,11 @@ def _load_firebase_credentials():
 
 
 # =============================================================================
-# In-Memory Fallback Stores
+# In-Memory Fallback Store (for dev/test mode when Firebase is disabled)
 # =============================================================================
 
-_analysis_store: Dict[str, dict] = {}
-_analysis_lock = threading.Lock()
-
-_draft_store: Dict[str, dict] = {}
-_draft_lock = threading.Lock()
-
-
-# =============================================================================
-# Analysis Store — Full AI analysis records
-# =============================================================================
-
-
-def save_analysis(analysis_id: str, data: dict) -> None:
-    """
-    Save or update an analysis record.
-
-    Uses the claim_id from the data as the Firestore document ID
-    so we can look up by claim_id without a composite index.
-    Also stores the analysis_id inside the document for reference.
-    """
-    db = _get_db()
-    claim_id = data.get("claim_id", analysis_id)
-
-    if db is not None:
-        try:
-            db.collection("ai_analyses").document(claim_id).set(data, merge=True)
-            logger.debug(f"Analysis {analysis_id} for claim {claim_id} saved to Firestore")
-            return
-        except Exception as e:
-            logger.error(f"Firestore save_analysis failed: {e}, falling back to memory")
-
-    # In-memory fallback
-    with _analysis_lock:
-        if analysis_id in _analysis_store:
-            _analysis_store[analysis_id].update(data)
-        else:
-            _analysis_store[analysis_id] = data
-
-
-def get_analysis(analysis_id: str) -> Optional[dict]:
-    """Retrieve an analysis record by its analysis ID."""
-    db = _get_db()
-    if db is not None:
-        try:
-            doc = db.collection("ai_analyses").document(analysis_id).get()
-            if doc.exists:
-                return doc.to_dict()
-            return None
-        except Exception as e:
-            logger.error(f"Firestore get_analysis failed: {e}")
-
-    return _analysis_store.get(analysis_id)
-
-
-def get_analysis_by_claim(claim_id: str) -> Optional[dict]:
-    """
-    Retrieve the analysis record for a given claim ID.
-
-    Since we use claim_id as the document ID, this is a simple
-    document get — no composite index needed.
-    """
-    db = _get_db()
-    if db is not None:
-        try:
-            doc = db.collection("ai_analyses").document(claim_id).get()
-            if doc.exists:
-                return doc.to_dict()
-            return None
-        except Exception as e:
-            logger.error(f"Firestore get_analysis_by_claim failed: {e}")
-
-    # In-memory fallback
-    matching = [
-        data
-        for data in _analysis_store.values()
-        if data.get("claim_id") == claim_id
-    ]
-    if not matching:
-        return None
-    matching.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    return matching[0]
+_memory_store: Dict[str, dict] = {}
+_memory_lock = threading.Lock()
 
 
 # =============================================================================
@@ -198,14 +119,14 @@ def update_claim_with_ai_result(
     Update the existing claim document in the 'claims' collection
     with the AI analysis results.
 
-    Writes two new fields:
+    Writes two fields:
       - aiDecision: "covered" | "not_covered"
-      - aiMessage: The AI-generated draft response message
+      - aiMessage: The AI's main reasoning/justification (NOT the draft letter)
 
     Args:
         claim_id: The Firestore document ID in the 'claims' collection.
         ai_decision: The AI coverage decision.
-        ai_message: The AI-generated draft response text.
+        ai_message: The AI reasoning/justification text.
 
     Returns:
         True if the update succeeded, False otherwise.
@@ -216,9 +137,8 @@ def update_claim_with_ai_result(
             f"Firebase not enabled — cannot update claim {claim_id}. "
             "aiDecision and aiMessage stored in memory only."
         )
-        with _analysis_lock:
-            key = f"claim_update_{claim_id}"
-            _analysis_store[key] = {
+        with _memory_lock:
+            _memory_store[f"claim_{claim_id}"] = {
                 "claim_id": claim_id,
                 "aiDecision": ai_decision,
                 "aiMessage": ai_message,
@@ -296,42 +216,27 @@ def get_policy_by_name(policy_name: str) -> Optional[dict]:
 
 
 # =============================================================================
-# Draft Response Store
+# In-Memory Analysis Cache (for GET endpoint — temporary within session)
 # =============================================================================
 
 
-def save_draft(claim_id: str, data: dict) -> None:
-    """Save or update a draft response record (keyed by claim_id)."""
-    db = _get_db()
-    if db is not None:
-        try:
-            db.collection("ai_drafts").document(claim_id).set(data, merge=True)
-            logger.debug(f"Draft for claim {claim_id} saved to Firestore")
-            return
-        except Exception as e:
-            logger.error(f"Firestore save_draft failed: {e}")
-
-    # In-memory fallback
-    with _draft_lock:
-        if claim_id in _draft_store:
-            _draft_store[claim_id].update(data)
-        else:
-            _draft_store[claim_id] = data
+def save_analysis_to_memory(analysis_id: str, data: dict) -> None:
+    """
+    Save analysis result to in-memory cache for retrieval via GET endpoint.
+    This is NOT persisted to Firestore — it's only for the current session.
+    """
+    with _memory_lock:
+        claim_id = data.get("claim_id", analysis_id)
+        _memory_store[f"analysis_{claim_id}"] = data
 
 
-def get_draft(claim_id: str) -> Optional[dict]:
-    """Retrieve a draft response record for a given claim ID."""
-    db = _get_db()
-    if db is not None:
-        try:
-            doc = db.collection("ai_drafts").document(claim_id).get()
-            if doc.exists:
-                return doc.to_dict()
-            return None
-        except Exception as e:
-            logger.error(f"Firestore get_draft failed: {e}")
-
-    return _draft_store.get(claim_id)
+def get_analysis_from_memory(claim_id: str) -> Optional[dict]:
+    """
+    Retrieve analysis result from in-memory cache.
+    Returns None if not found (analysis not yet completed or service restarted).
+    """
+    with _memory_lock:
+        return _memory_store.get(f"analysis_{claim_id}")
 
 
 # =============================================================================
@@ -341,7 +246,5 @@ def get_draft(claim_id: str) -> Optional[dict]:
 
 def clear_all_stores() -> None:
     """Clear all in-memory stores. Used in tests only."""
-    with _analysis_lock:
-        _analysis_store.clear()
-    with _draft_lock:
-        _draft_store.clear()
+    with _memory_lock:
+        _memory_store.clear()

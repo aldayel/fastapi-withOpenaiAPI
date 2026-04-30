@@ -23,6 +23,7 @@ config_module.settings = Settings()
 
 from app.main import app
 from app.services.store import clear_all_stores
+from app.services.response_service import clear_draft_store
 
 
 @pytest_asyncio.fixture
@@ -37,5 +38,7 @@ async def client():
 def clean_stores():
     """Clear all in-memory stores before each test."""
     clear_all_stores()
+    clear_draft_store()
     yield
     clear_all_stores()
+    clear_draft_store()

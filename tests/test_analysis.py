@@ -8,7 +8,7 @@ and the health check endpoint.
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.services.store import save_analysis
+from app.services.store import save_analysis_to_memory
 
 
 # =============================================================================
@@ -102,8 +102,8 @@ async def test_get_analysis_not_found(client):
 @pytest.mark.asyncio
 async def test_get_analysis_pending(client):
     """US-22: Requesting analysis that is pending returns pending status."""
-    # Manually insert a pending analysis record
-    save_analysis("test-analysis-id", {
+    # Manually insert a pending analysis record into memory
+    save_analysis_to_memory("test-analysis-id", {
         "analysis_id": "test-analysis-id",
         "claim_id": "CLM-002",
         "status": "pending",
@@ -121,7 +121,7 @@ async def test_get_analysis_pending(client):
 @pytest.mark.asyncio
 async def test_get_analysis_completed(client):
     """US-21 + US-22: Completed analysis returns full results with clauses."""
-    save_analysis("test-analysis-completed", {
+    save_analysis_to_memory("test-analysis-completed", {
         "analysis_id": "test-analysis-completed",
         "claim_id": "CLM-003",
         "status": "completed",
@@ -160,7 +160,7 @@ async def test_get_analysis_completed(client):
 @pytest.mark.asyncio
 async def test_get_analysis_failed(client):
     """US-22: Failed analysis returns error details."""
-    save_analysis("test-analysis-failed", {
+    save_analysis_to_memory("test-analysis-failed", {
         "analysis_id": "test-analysis-failed",
         "claim_id": "CLM-004",
         "status": "failed",

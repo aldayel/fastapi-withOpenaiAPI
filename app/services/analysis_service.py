@@ -7,12 +7,12 @@ Orchestrates the full AI claim analysis pipeline (US-20, US-21):
   3. Build structured prompt
   4. Call Gemini LLM API
   5. Parse and validate LLM response
-  6. Generate draft response (US-23)
-  7. Store results in Firestore (ai_analyses + ai_drafts collections)
-  8. Write aiDecision + aiMessage back to the claims collection
+  6. Generate draft response (US-23) — only for not_covered claims
+  7. Write aiDecision + aiMessage (reasoning) to the claims collection
+  8. Cache results in memory for GET endpoint retrieval
 
-This is the process_event() abstraction — all business logic lives here,
-NOT in the router/endpoint layer.
+STATELESS: No ai_analyses or ai_drafts Firestore collections.
+Only writes aiDecision and aiMessage to the existing claim document.
 """
 
 import logging
@@ -21,13 +21,11 @@ from datetime import datetime
 from typing import Optional
 
 from app.config import settings
-from app.models.analysis import AnalysisRecord, StoredClause
 from app.schemas.analysis import AnalysisTriggerRequest
 from app.services import llm_service, pdf_service, response_service
 from app.services.store import (
-    get_analysis,
-    get_analysis_by_claim,
-    save_analysis,
+    save_analysis_to_memory,
+    get_analysis_from_memory,
     update_claim_with_ai_result,
 )
 from app.utils.exceptions import (
@@ -50,8 +48,13 @@ async def process_claim_analysis(
     Core AI analysis pipeline — the process_event() abstraction.
 
     This function is called as a background task (FastAPI BackgroundTasks).
-    It orchestrates the entire analysis workflow and updates the store
-    at each stage for status tracking.
+    It orchestrates the entire analysis workflow:
+      1. Extract PDFs
+      2. Call Gemini LLM
+      3. Parse response
+      4. Generate draft (only for not_covered)
+      5. Write aiDecision + aiMessage to claim document
+      6. Cache result in memory for GET retrieval
 
     Args:
         analysis_id: Unique identifier for this analysis run.
@@ -59,19 +62,16 @@ async def process_claim_analysis(
     """
     start_time = time.time()
 
-    # Initialize the analysis record as "processing"
-    record = AnalysisRecord(
-        analysis_id=analysis_id,
-        claim_id=claim_data.claim_id,
-        examiner_id=claim_data.examiner_id,
-        status="processing",
-        patient_info=claim_data.patient_info.model_dump(),
-        treatment_type=claim_data.treatment_type,
-        policy_plan_id=claim_data.policy_plan_id,
-        ai_model_used=settings.LLM_MODEL,
-        created_at=datetime.utcnow(),
-    )
-    save_analysis(analysis_id, record.to_dict())
+    # Initialize in-memory record as "processing"
+    record = {
+        "analysis_id": analysis_id,
+        "claim_id": claim_data.claim_id,
+        "examiner_id": claim_data.examiner_id,
+        "status": "processing",
+        "ai_model_used": settings.LLM_MODEL,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    save_analysis_to_memory(analysis_id, record)
 
     try:
         # =====================================================================
@@ -127,6 +127,7 @@ async def process_claim_analysis(
 
         # =====================================================================
         # Step 6: Generate draft response (US-23)
+        # Only AI-generated for not_covered; hardcoded for covered
         # =====================================================================
         logger.info(f"[{analysis_id}] Step 6: Generating draft response...")
         draft_text = await response_service.generate_draft(
@@ -140,49 +141,42 @@ async def process_claim_analysis(
         )
 
         # =====================================================================
-        # Step 7: Store completed results in ai_analyses collection
+        # Step 7: Write aiDecision + aiMessage to the claims collection
+        # aiMessage = the AI reasoning (NOT the draft letter)
         # =====================================================================
         processing_time = time.time() - start_time
         logger.info(
-            f"[{analysis_id}] Step 7: Storing results "
-            f"(processing time: {processing_time:.2f}s)..."
-        )
-
-        # Build clause objects
-        clauses = [
-            StoredClause(
-                clause_id=c.get("clause_id", ""),
-                clause_text=c.get("clause_text", ""),
-                relevance=c.get("relevance", ""),
-            )
-            for c in parsed.get("applicable_clauses", [])
-        ]
-
-        # Update the record with results
-        record.status = "completed"
-        record.coverage_decision = parsed["coverage_decision"]
-        record.confidence_score = parsed.get("confidence_score", 0.0)
-        record.applicable_clauses = clauses
-        record.reasoning = parsed.get("reasoning", "")
-        record.flags = parsed.get("flags", [])
-        record.draft_response = draft_text
-        record.processing_time_seconds = round(processing_time, 2)
-        record.completed_at = datetime.utcnow()
-
-        save_analysis(analysis_id, record.to_dict())
-
-        # =====================================================================
-        # Step 8: Write aiDecision + aiMessage to the claims collection
-        # =====================================================================
-        logger.info(
-            f"[{analysis_id}] Step 8: Updating claim {claim_data.claim_id} "
-            f"with aiDecision and aiMessage..."
+            f"[{analysis_id}] Step 7: Updating claim {claim_data.claim_id} "
+            f"with aiDecision and aiMessage (reasoning)..."
         )
         update_claim_with_ai_result(
             claim_id=claim_data.claim_id,
             ai_decision=parsed["coverage_decision"],
-            ai_message=draft_text,
+            ai_message=parsed["reasoning"],
         )
+
+        # =====================================================================
+        # Step 8: Cache completed results in memory for GET endpoint
+        # =====================================================================
+        logger.info(
+            f"[{analysis_id}] Step 8: Caching results in memory "
+            f"(processing time: {processing_time:.2f}s)..."
+        )
+
+        # Build completed record
+        record.update({
+            "status": "completed",
+            "coverage_decision": parsed["coverage_decision"],
+            "confidence_score": parsed.get("confidence_score", 0.0),
+            "applicable_clauses": parsed.get("applicable_clauses", []),
+            "reasoning": parsed.get("reasoning", ""),
+            "flags": parsed.get("flags", []),
+            "draft_response": draft_text,
+            "ai_model_used": settings.LLM_MODEL,
+            "processing_time_seconds": round(processing_time, 2),
+            "completed_at": datetime.utcnow().isoformat(),
+        })
+        save_analysis_to_memory(analysis_id, record)
 
         logger.info(
             f"[{analysis_id}] Analysis completed successfully. "
@@ -200,20 +194,21 @@ async def process_claim_analysis(
 
 def _handle_failure(
     analysis_id: str,
-    record: AnalysisRecord,
+    record: dict,
     start_time: float,
     error_message: str,
 ) -> None:
-    """Update the analysis record to failed status."""
+    """Update the in-memory analysis record to failed status."""
     processing_time = time.time() - start_time
     logger.error(f"[{analysis_id}] Analysis failed: {error_message}")
 
-    record.status = "failed"
-    record.error_message = error_message
-    record.processing_time_seconds = round(processing_time, 2)
-    record.completed_at = datetime.utcnow()
-
-    save_analysis(analysis_id, record.to_dict())
+    record.update({
+        "status": "failed",
+        "error_message": error_message,
+        "processing_time_seconds": round(processing_time, 2),
+        "completed_at": datetime.utcnow().isoformat(),
+    })
+    save_analysis_to_memory(analysis_id, record)
 
 
 def _parse_llm_response(response: dict) -> dict:
@@ -276,6 +271,10 @@ def get_analysis_result(claim_id: str) -> dict:
     """
     Retrieve the analysis result for a claim (US-22).
 
+    Results are cached in memory only (stateless architecture).
+    If the service restarts, past results are lost — the frontend
+    should rely on the aiDecision/aiMessage fields in the claim document.
+
     Args:
         claim_id: The claim to retrieve analysis for.
 
@@ -285,7 +284,7 @@ def get_analysis_result(claim_id: str) -> dict:
     Raises:
         AnalysisNotFoundError: If no analysis exists for the claim.
     """
-    data = get_analysis_by_claim(claim_id)
+    data = get_analysis_from_memory(claim_id)
     if data is None:
         raise AnalysisNotFoundError(claim_id)
     return data

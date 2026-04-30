@@ -2,12 +2,13 @@
 Watheeq AI Service — Response Endpoint Tests
 
 Tests for US-23 (Get Draft Response) and US-24 (Edit Draft Response).
+Drafts are stored in memory only (stateless architecture).
 """
 
 import pytest
 from datetime import datetime
 
-from app.services.store import save_draft
+from app.services.response_service import _save_draft_to_memory
 
 
 # =============================================================================
@@ -25,7 +26,7 @@ async def test_get_draft_not_found(client):
 @pytest.mark.asyncio
 async def test_get_draft_success(client):
     """US-23: Retrieving an existing draft returns full data."""
-    save_draft("CLM-010", {
+    _save_draft_to_memory("CLM-010", {
         "claim_id": "CLM-010",
         "original_draft": "Dear patient, your claim for Physiotherapy has been reviewed...",
         "current_draft": "Dear patient, your claim for Physiotherapy has been reviewed...",
@@ -47,7 +48,7 @@ async def test_get_draft_success(client):
 @pytest.mark.asyncio
 async def test_get_draft_edited(client):
     """US-23: Retrieving an edited draft shows both original and current."""
-    save_draft("CLM-011", {
+    _save_draft_to_memory("CLM-011", {
         "claim_id": "CLM-011",
         "original_draft": "Original AI draft text here.",
         "current_draft": "Edited version by examiner.",
@@ -87,7 +88,7 @@ async def test_edit_draft_not_found(client):
 @pytest.mark.asyncio
 async def test_edit_draft_success(client):
     """US-24: Successfully editing a draft updates current_draft."""
-    save_draft("CLM-020", {
+    _save_draft_to_memory("CLM-020", {
         "claim_id": "CLM-020",
         "original_draft": "Original AI draft for CLM-020.",
         "current_draft": "Original AI draft for CLM-020.",
@@ -116,7 +117,7 @@ async def test_edit_draft_success(client):
 @pytest.mark.asyncio
 async def test_edit_draft_preserves_original(client):
     """US-24: Editing preserves the original AI draft for audit."""
-    save_draft("CLM-021", {
+    _save_draft_to_memory("CLM-021", {
         "claim_id": "CLM-021",
         "original_draft": "Original AI draft that should be preserved.",
         "current_draft": "Original AI draft that should be preserved.",
@@ -158,7 +159,7 @@ async def test_edit_draft_missing_fields(client):
 @pytest.mark.asyncio
 async def test_edit_draft_multiple_times(client):
     """US-24: Draft can be edited multiple times, always preserving original."""
-    save_draft("CLM-022", {
+    _save_draft_to_memory("CLM-022", {
         "claim_id": "CLM-022",
         "original_draft": "First AI draft.",
         "current_draft": "First AI draft.",

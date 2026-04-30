@@ -2,7 +2,7 @@
 Watheeq AI Service — LLM and PDF Service Tests
 
 Unit tests for the service layer including LLM response parsing,
-PDF text extraction, and analysis pipeline logic.
+PDF text extraction, and in-memory store logic.
 """
 
 import pytest
@@ -257,7 +257,7 @@ class TestPDFService:
 
 
 # =============================================================================
-# Store Tests
+# Store Tests (In-Memory)
 # =============================================================================
 
 
@@ -265,46 +265,36 @@ class TestStore:
     """Tests for the in-memory data store."""
 
     def test_save_and_get_analysis(self):
-        """Save and retrieve an analysis record."""
-        from app.services.store import save_analysis, get_analysis
+        """Save and retrieve an analysis record from memory."""
+        from app.services.store import save_analysis_to_memory, get_analysis_from_memory
 
-        save_analysis("A-001", {"claim_id": "C-001", "status": "pending"})
-        result = get_analysis("A-001")
+        save_analysis_to_memory("A-001", {"claim_id": "C-001", "status": "pending"})
+        result = get_analysis_from_memory("C-001")
         assert result is not None
         assert result["claim_id"] == "C-001"
 
     def test_get_analysis_not_found(self):
         """Get returns None for non-existent analysis."""
-        from app.services.store import get_analysis
+        from app.services.store import get_analysis_from_memory
 
-        result = get_analysis("NONEXISTENT")
+        result = get_analysis_from_memory("NONEXISTENT")
         assert result is None
 
-    def test_save_and_get_analysis_by_claim(self):
-        """Retrieve analysis by claim_id."""
-        from app.services.store import save_analysis, get_analysis_by_claim
-
-        save_analysis("A-002", {"claim_id": "C-002", "status": "completed", "created_at": "2026-01-01"})
-        result = get_analysis_by_claim("C-002")
-        assert result is not None
-        assert result["status"] == "completed"
-
     def test_save_and_get_draft(self):
-        """Save and retrieve a draft response."""
-        from app.services.store import save_draft, get_draft
+        """Save and retrieve a draft response from memory."""
+        from app.services.response_service import _save_draft_to_memory, _get_draft_from_memory
 
-        save_draft("C-010", {"claim_id": "C-010", "original_draft": "Draft text"})
-        result = get_draft("C-010")
+        _save_draft_to_memory("C-010", {"claim_id": "C-010", "original_draft": "Draft text"})
+        result = _get_draft_from_memory("C-010")
         assert result is not None
         assert result["original_draft"] == "Draft text"
 
     def test_update_analysis(self):
-        """Updating an analysis merges new data."""
-        from app.services.store import save_analysis, get_analysis
+        """Updating an analysis replaces the record in memory."""
+        from app.services.store import save_analysis_to_memory, get_analysis_from_memory
 
-        save_analysis("A-003", {"claim_id": "C-003", "status": "pending"})
-        save_analysis("A-003", {"status": "completed", "coverage_decision": "covered"})
-        result = get_analysis("A-003")
+        save_analysis_to_memory("A-003", {"claim_id": "C-003", "status": "pending"})
+        save_analysis_to_memory("A-003-v2", {"claim_id": "C-003", "status": "completed", "coverage_decision": "covered"})
+        result = get_analysis_from_memory("C-003")
         assert result["status"] == "completed"
         assert result["coverage_decision"] == "covered"
-        assert result["claim_id"] == "C-003"

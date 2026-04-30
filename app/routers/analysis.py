@@ -58,13 +58,10 @@ async def trigger_analysis(
     2. Generates a unique analysis_id
     3. Queues the analysis as a background task
     4. Returns HTTP 202 immediately
-
-    The actual analysis pipeline runs asynchronously in analysis_service.
     """
     analysis_id = str(uuid4())
 
     # Queue the analysis as a background task
-    # PRODUCTION UPGRADE: Replace with Celery task for distributed processing
     background_tasks.add_task(
         analysis_service.process_claim_analysis,
         analysis_id=analysis_id,
@@ -112,8 +109,9 @@ async def health_check() -> HealthCheckResponse:
     description=(
         "Returns the AI analysis results including coverage decision, "
         "applicable policy clauses with citations, reasoning, and draft response. "
-        "If analysis is still processing, returns the current status. "
-        "All results are labeled as AI-Assisted (HITL principle)."
+        "Results are cached in memory only (stateless architecture). "
+        "If the service has restarted, results may not be available — "
+        "use the aiDecision/aiMessage fields on the claim document instead."
     ),
     dependencies=[Depends(verify_bearer_token)],
 )
@@ -121,11 +119,7 @@ async def get_analysis_results(claim_id: str) -> AnalysisResultResponse:
     """
     Get AI analysis results for a claim (US-21 + US-22).
 
-    This endpoint:
-    1. Looks up the analysis record by claim_id
-    2. Returns the full analysis results if completed
-    3. Returns current status if still processing
-    4. Returns 404 if no analysis exists for this claim
+    Results are retrieved from in-memory cache (stateless — no Firestore).
     """
     try:
         data = analysis_service.get_analysis_result(claim_id)
@@ -135,7 +129,7 @@ async def get_analysis_results(claim_id: str) -> AnalysisResultResponse:
             detail=e.message,
         )
 
-    # Build the response from stored data
+    # Build the response from cached data
     applicable_clauses = None
     if data.get("applicable_clauses"):
         from app.schemas.analysis import ApplicableClause
@@ -165,5 +159,3 @@ async def get_analysis_results(claim_id: str) -> AnalysisResultResponse:
         completed_at=data.get("completed_at"),
         error_message=data.get("error_message"),
     )
-
-
