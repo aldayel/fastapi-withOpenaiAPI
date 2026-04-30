@@ -40,13 +40,13 @@ class AnalysisTriggerRequest(BaseModel):
         ..., description="Type of treatment (e.g., Physiotherapy, Surgery)"
     )
     policy_plan_id: str = Field(..., description="ID of the insurance policy plan")
-    medical_report_url: str = Field(
-        ...,
-        description="URL to the medical report PDF (Firebase Storage URL or base64)",
+    medical_report_url: Optional[str] = Field(
+        default=None,
+        description="URL to the medical report PDF. If not provided, read from Firestore claim document.",
     )
-    policy_document_url: str = Field(
-        ...,
-        description="URL to the policy document PDF (Firebase Storage URL or base64)",
+    policy_document_url: Optional[str] = Field(
+        default=None,
+        description="URL to the policy document PDF. If not provided, looked up from Firestore policies collection.",
     )
     examiner_id: str = Field(
         ..., description="ID of the Claims Examiner who triggered the analysis"

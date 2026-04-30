@@ -195,12 +195,27 @@ def get_policy_by_name(policy_name: str) -> Optional[dict]:
     Retrieve a policy document from the 'policies' collection by name.
 
     Used to find the policy PDF URL for a given claim's policyName.
+    Tries multiple matching strategies:
+      1. Exact match on 'policy_name' field
+      2. Lowercase match on 'policy_name' field
+      3. Scan all policies for case-insensitive partial match
     """
     db = _get_db()
     if db is None:
         return None
 
     try:
+        # Strategy 1: Exact match
+        docs = (
+            db.collection("policies")
+            .where("policy_name", "==", policy_name)
+            .limit(1)
+            .get()
+        )
+        if docs:
+            return docs[0].to_dict()
+
+        # Strategy 2: Lowercase match
         docs = (
             db.collection("policies")
             .where("policy_name", "==", policy_name.lower())
@@ -209,7 +224,20 @@ def get_policy_by_name(policy_name: str) -> Optional[dict]:
         )
         if docs:
             return docs[0].to_dict()
+
+        # Strategy 3: Scan all policies for partial/case-insensitive match
+        all_docs = db.collection("policies").stream()
+        search_lower = policy_name.lower()
+        for doc in all_docs:
+            data = doc.to_dict()
+            doc_name = data.get("policy_name", "").lower()
+            if doc_name == search_lower or search_lower in doc_name or doc_name in search_lower:
+                logger.info(f"Found policy via partial match: '{data.get('policy_name')}'")
+                return data
+
+        logger.warning(f"No policy found matching '{policy_name}'")
         return None
+
     except Exception as e:
         logger.error(f"Failed to get policy '{policy_name}': {e}")
         return None

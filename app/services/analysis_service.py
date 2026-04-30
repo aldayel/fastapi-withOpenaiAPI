@@ -27,6 +27,8 @@ from app.services.store import (
     save_analysis_to_memory,
     get_analysis_from_memory,
     update_claim_with_ai_result,
+    get_claim,
+    get_policy_by_name,
 )
 from app.utils.exceptions import (
     AnalysisNotFoundError,
@@ -75,12 +77,59 @@ async def process_claim_analysis(
 
     try:
         # =====================================================================
+        # Step 0: Resolve PDF URLs from Firestore if not provided in request
+        # =====================================================================
+        medical_report_url = claim_data.medical_report_url
+        policy_document_url = claim_data.policy_document_url
+
+        if not medical_report_url or not policy_document_url:
+            logger.info(
+                f"[{analysis_id}] Step 0: Resolving PDF URLs from Firestore..."
+            )
+            claim_doc = get_claim(claim_data.claim_id)
+            if claim_doc:
+                # Get medical report URL from claim document
+                if not medical_report_url:
+                    medical_report_url = claim_doc.get("medicalReport")
+                    if medical_report_url:
+                        logger.info(
+                            f"[{analysis_id}] Got medicalReport URL from claim doc"
+                        )
+                    else:
+                        raise PDFExtractionError(
+                            "No medical report URL found in claim document or request"
+                        )
+
+                # Get policy document URL from policies collection
+                if not policy_document_url:
+                    policy_name = claim_doc.get("policyName", "")
+                    if policy_name:
+                        policy_doc = get_policy_by_name(policy_name)
+                        if policy_doc:
+                            policy_document_url = policy_doc.get("file_url")
+                            logger.info(
+                                f"[{analysis_id}] Got policy URL from policies "
+                                f"collection (policyName='{policy_name}')"
+                            )
+                        else:
+                            raise PDFExtractionError(
+                                f"Policy '{policy_name}' not found in policies collection"
+                            )
+                    else:
+                        raise PDFExtractionError(
+                            "No policyName found in claim document"
+                        )
+            else:
+                raise PDFExtractionError(
+                    f"Claim {claim_data.claim_id} not found in Firestore "
+                    "and no PDF URLs provided in request"
+                )
+
+        # =====================================================================
         # Step 1: Extract text from medical report PDF
         # =====================================================================
         logger.info(f"[{analysis_id}] Step 1: Extracting medical report text...")
-        medical_text = await pdf_service.extract_text(
-            claim_data.medical_report_url
-        )
+        medical_text = await pdf_service.extract_text(medical_report_url)
         logger.info(
             f"[{analysis_id}] Medical report extracted: "
             f"{len(medical_text)} characters"
@@ -90,9 +139,7 @@ async def process_claim_analysis(
         # Step 2: Extract text from policy document PDF
         # =====================================================================
         logger.info(f"[{analysis_id}] Step 2: Extracting policy document text...")
-        policy_text = await pdf_service.extract_text(
-            claim_data.policy_document_url
-        )
+        policy_text = await pdf_service.extract_text(policy_document_url)
         logger.info(
             f"[{analysis_id}] Policy document extracted: "
             f"{len(policy_text)} characters"
