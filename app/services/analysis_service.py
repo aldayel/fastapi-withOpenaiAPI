@@ -81,6 +81,7 @@ async def process_claim_analysis(
         # =====================================================================
         medical_report_url = claim_data.medical_report_url
         policy_document_url = claim_data.policy_document_url
+        claim_doc = None  # Will be fetched from Firestore if needed
 
         if not medical_report_url or not policy_document_url:
             logger.info(
@@ -146,14 +147,49 @@ async def process_claim_analysis(
         )
 
         # =====================================================================
-        # Step 3: Build structured prompt
+        # Step 2b: Extract text from supporting documents (if any)
         # =====================================================================
-        logger.info(f"[{analysis_id}] Step 3: Building analysis prompt...")
+        supporting_text = ""
+        supporting_doc_url = None
+
+        # Try to get supporting documents URL from Firestore claim doc
+        if not claim_doc:
+            claim_doc = get_claim(claim_data.claim_id)
+        if claim_doc:
+            supporting_doc_url = claim_doc.get("supportingDocuments")
+
+        if supporting_doc_url and supporting_doc_url not in ("some URL", ""):
+            logger.info(
+                f"[{analysis_id}] Step 2b: Extracting supporting documents text..."
+            )
+            try:
+                supporting_text = await pdf_service.extract_text(supporting_doc_url)
+                logger.info(
+                    f"[{analysis_id}] Supporting documents extracted: "
+                    f"{len(supporting_text)} characters"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[{analysis_id}] Could not extract supporting documents "
+                    f"(non-fatal): {e}"
+                )
+                supporting_text = ""
+        else:
+            logger.info(
+                f"[{analysis_id}] Step 2b: No supporting documents found for this claim"
+            )
+
+        # =====================================================================
+        # Step 3: Build structured prompt (all 6 FR-34 fields)
+        # =====================================================================
+        logger.info(f"[{analysis_id}] Step 3: Building analysis prompt (FR-34: 6/6 fields)...")
         user_prompt = build_analysis_prompt(
+            claim_id=claim_data.claim_id,
             patient_info=claim_data.patient_info.model_dump(),
             treatment_type=claim_data.treatment_type,
             medical_report_text=medical_text,
             policy_document_text=policy_text,
+            supporting_documents_text=supporting_text,
         )
 
         # =====================================================================

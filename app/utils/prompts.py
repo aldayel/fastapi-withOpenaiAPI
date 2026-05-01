@@ -49,12 +49,16 @@ IMPORTANT RULES:
 """
 
 CLAIM_ANALYSIS_USER_PROMPT = """## Claim Details
+- Claim Reference Number: {claim_id}
 - Patient: {first_name} {last_name}
 - Date of Birth: {date_of_birth}
 - Treatment Type: {treatment_type}
 
 ## Medical Report Content
 {medical_report_text}
+
+## Supporting Documents
+{supporting_documents_text}
 
 ## Insurance Policy Document
 {policy_document_text}
@@ -106,18 +110,22 @@ Generate the response message for the claimant:
 
 
 def build_analysis_prompt(
+    claim_id: str,
     patient_info: dict,
     treatment_type: str,
     medical_report_text: str,
     policy_document_text: str,
+    supporting_documents_text: str = "",
 ) -> str:
     """Build the user prompt for claim analysis."""
     return CLAIM_ANALYSIS_USER_PROMPT.format(
+        claim_id=claim_id,
         first_name=patient_info.get("first_name", "N/A"),
         last_name=patient_info.get("last_name", "N/A"),
         date_of_birth=patient_info.get("date_of_birth", "N/A"),
         treatment_type=treatment_type,
         medical_report_text=medical_report_text or "[No medical report text available]",
+        supporting_documents_text=supporting_documents_text or "[No supporting documents provided]",
         policy_document_text=policy_document_text or "[No policy document text available]",
     )
 

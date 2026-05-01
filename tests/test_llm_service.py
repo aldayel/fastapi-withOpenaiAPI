@@ -136,6 +136,7 @@ class TestPromptBuilding:
     def test_build_analysis_prompt(self):
         """Analysis prompt includes all patient and document data."""
         prompt = build_analysis_prompt(
+            claim_id="CLM-TEST-001",
             patient_info={
                 "first_name": "Mohammed",
                 "last_name": "Al-Qahtani",
@@ -145,6 +146,7 @@ class TestPromptBuilding:
             medical_report_text="Patient requires 10 sessions of physiotherapy.",
             policy_document_text="Section 4.2: Physiotherapy is covered up to 20 sessions.",
         )
+        assert "CLM-TEST-001" in prompt
         assert "Mohammed" in prompt
         assert "Al-Qahtani" in prompt
         assert "1990-01-15" in prompt
@@ -155,6 +157,7 @@ class TestPromptBuilding:
     def test_build_analysis_prompt_missing_data(self):
         """Analysis prompt handles missing data gracefully."""
         prompt = build_analysis_prompt(
+            claim_id="CLM-MISSING-001",
             patient_info={},
             treatment_type="Surgery",
             medical_report_text="",
