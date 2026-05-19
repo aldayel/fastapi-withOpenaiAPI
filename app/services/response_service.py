@@ -45,6 +45,7 @@ async def generate_draft(
     reasoning: str,
     applicable_clauses: list,
     flags: list,
+    rejection_reasons: list = None,
 ) -> str:
     """
     Generate a draft response message for the examiner (US-23).
@@ -83,6 +84,7 @@ async def generate_draft(
             reasoning=reasoning,
             applicable_clauses=applicable_clauses,
             flags=flags,
+            rejection_reasons=rejection_reasons or [],
         )
 
         draft_text = await llm_service.generate_text(

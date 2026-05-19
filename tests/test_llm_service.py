@@ -34,12 +34,14 @@ class TestParseLLMResponse:
                 }
             ],
             "reasoning": "The treatment is covered under the basic plan.",
+            "rejection_reasons": [],
             "flags": [],
         }
         result = _parse_llm_response(response)
         assert result["coverage_decision"] == "covered"
         assert result["confidence_score"] == 0.95
         assert len(result["applicable_clauses"]) == 1
+        assert result["rejection_reasons"] == []
         assert "recommended_action" not in result
 
     def test_valid_not_covered_response(self):
@@ -49,10 +51,13 @@ class TestParseLLMResponse:
             "confidence_score": 0.88,
             "applicable_clauses": [],
             "reasoning": "Treatment not listed in policy.",
+            "rejection_reasons": ["RULE 3 — Treatment Not Covered: Surgery not listed in policy"],
             "flags": ["Treatment type not found in policy"],
         }
         result = _parse_llm_response(response)
         assert result["coverage_decision"] == "not_covered"
+        assert len(result["rejection_reasons"]) == 1
+        assert "RULE 3" in result["rejection_reasons"][0]
         assert "recommended_action" not in result
 
     def test_partial_is_now_invalid(self):
@@ -106,10 +111,11 @@ class TestParseLLMResponse:
             "coverage_decision": "covered",
         }
         result = _parse_llm_response(response)
-        assert result["confidence_score"] is None
+        assert result["confidence_score"] == 0.0
         assert result["applicable_clauses"] == []
         assert result["reasoning"] == "No reasoning provided"
         assert result["flags"] == []
+        assert result["rejection_reasons"] == []
 
     def test_recommended_action_in_llm_output_is_ignored(self):
         """Even if the LLM returns recommended_action, it is not in the parsed result."""

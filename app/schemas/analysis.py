@@ -118,6 +118,10 @@ class AnalysisResultResponse(BaseModel):
     reasoning: Optional[str] = Field(
         default=None, description="AI justification for the coverage decision"
     )
+    rejection_reasons: Optional[List[str]] = Field(
+        default=None,
+        description="Hard-rejection rules triggered (identity mismatch, amount exceeded, etc.)",
+    )
     flags: Optional[List[str]] = Field(
         default=None,
         description="Concerns or items flagged for manual review",

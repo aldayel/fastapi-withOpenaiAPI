@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     # --- LLM Configuration (Google Gemini) ---
     GEMINI_API_KEY: str = ""
     LLM_MODEL: str = "gemini-3.1-flash-lite-preview"
-    LLM_TEMPERATURE: float = 0.1
-    LLM_MAX_TOKENS: int = 4000
+    LLM_TEMPERATURE: float = 0.0
+    LLM_MAX_TOKENS: int = 8000
 
     # --- Firebase / Firestore ---
     FIREBASE_ENABLED: bool = True

@@ -2,19 +2,29 @@
 Watheeq AI Service — Analysis Service (THE CORE)
 
 Orchestrates the full AI claim analysis pipeline (US-20, US-21):
-  1. Extract text from medical report PDF
-  2. Extract text from policy document PDF
-  3. Build structured prompt
-  4. Call Gemini LLM API
-  5. Parse and validate LLM response
-  6. Generate draft response (US-23) — only for not_covered claims
-  7. Write aiDecision + aiMessage (reasoning) to the claims collection
-  8. Cache results in memory for GET endpoint retrieval
+  1. Resolve PDF URLs from Firestore if not provided
+  2. Extract text from medical report PDF
+  3. Extract text from policy document PDF
+  4. Extract text from supporting documents (if any)
+  5. Build structured prompt (FR-34: all 6 required fields)
+  6. Call Gemini LLM API
+  7. Parse and validate LLM response (enforce hard-rejection rules)
+  8. Generate draft response (US-23)
+  9. Write aiDecision + aiMessage (reasoning) to the claims collection
+  10. Cache results in memory for GET endpoint retrieval
 
 STATELESS: No ai_analyses or ai_drafts Firestore collections.
 Only writes aiDecision and aiMessage to the existing claim document.
+
+HARD-REJECTION RULES (enforced in prompt + validated in parser):
+  - Identity mismatch (name or DOB) → always not_covered
+  - Claimed amount exceeds policy limit → always not_covered
+  - Treatment not covered by policy → always not_covered
+  - Missing/invalid documentation → always not_covered
+  - Claim conditions not met → always not_covered
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -47,16 +57,10 @@ async def process_claim_analysis(
     claim_data: AnalysisTriggerRequest,
 ) -> None:
     """
-    Core AI analysis pipeline — the process_event() abstraction.
+    Core AI analysis pipeline — runs as a FastAPI BackgroundTask.
 
-    This function is called as a background task (FastAPI BackgroundTasks).
-    It orchestrates the entire analysis workflow:
-      1. Extract PDFs
-      2. Call Gemini LLM
-      3. Parse response
-      4. Generate draft (only for not_covered)
-      5. Write aiDecision + aiMessage to claim document
-      6. Cache result in memory for GET retrieval
+    Orchestrates the entire analysis workflow with a configurable timeout.
+    If the analysis exceeds ANALYSIS_TIMEOUT_SECONDS, it is marked as failed.
 
     Args:
         analysis_id: Unique identifier for this analysis run.
@@ -76,26 +80,46 @@ async def process_claim_analysis(
     save_analysis_to_memory(analysis_id, record)
 
     try:
-        # =====================================================================
+        # Enforce analysis timeout
+        await asyncio.wait_for(
+            _run_analysis_pipeline(analysis_id, claim_data, record, start_time),
+            timeout=settings.ANALYSIS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        _handle_failure(
+            analysis_id, record, start_time,
+            f"Analysis timed out after {settings.ANALYSIS_TIMEOUT_SECONDS} seconds"
+        )
+    except Exception as e:
+        _handle_failure(analysis_id, record, start_time, f"Unexpected error: {e}")
+
+
+async def _run_analysis_pipeline(
+    analysis_id: str,
+    claim_data: AnalysisTriggerRequest,
+    record: dict,
+    start_time: float,
+) -> None:
+    """
+    Inner pipeline — separated so the timeout wrapper can cancel it cleanly.
+    """
+    try:
+        # =================================================================
         # Step 0: Resolve PDF URLs from Firestore if not provided in request
-        # =====================================================================
+        # =================================================================
         medical_report_url = claim_data.medical_report_url
         policy_document_url = claim_data.policy_document_url
         claim_doc = None  # Will be fetched from Firestore if needed
 
         if not medical_report_url or not policy_document_url:
-            logger.info(
-                f"[{analysis_id}] Step 0: Resolving PDF URLs from Firestore..."
-            )
+            logger.info(f"[{analysis_id}] Step 0: Resolving PDF URLs from Firestore...")
             claim_doc = get_claim(claim_data.claim_id)
             if claim_doc:
                 # Get medical report URL from claim document
                 if not medical_report_url:
                     medical_report_url = claim_doc.get("medicalReport")
                     if medical_report_url:
-                        logger.info(
-                            f"[{analysis_id}] Got medicalReport URL from claim doc"
-                        )
+                        logger.info(f"[{analysis_id}] Got medicalReport URL from claim doc")
                     else:
                         raise PDFExtractionError(
                             "No medical report URL found in claim document or request"
@@ -126,42 +150,48 @@ async def process_claim_analysis(
                     "and no PDF URLs provided in request"
                 )
 
-        # =====================================================================
+        # =================================================================
         # Step 1: Extract text from medical report PDF
-        # =====================================================================
+        # =================================================================
         logger.info(f"[{analysis_id}] Step 1: Extracting medical report text...")
         medical_text = await pdf_service.extract_text(medical_report_url)
+        if not medical_text or len(medical_text.strip()) < 50:
+            raise PDFExtractionError(
+                "Medical report PDF appears to be empty or unreadable. "
+                "Cannot proceed with analysis."
+            )
         logger.info(
-            f"[{analysis_id}] Medical report extracted: "
-            f"{len(medical_text)} characters"
+            f"[{analysis_id}] Medical report extracted: {len(medical_text)} characters"
         )
 
-        # =====================================================================
+        # =================================================================
         # Step 2: Extract text from policy document PDF
-        # =====================================================================
+        # =================================================================
         logger.info(f"[{analysis_id}] Step 2: Extracting policy document text...")
         policy_text = await pdf_service.extract_text(policy_document_url)
+        if not policy_text or len(policy_text.strip()) < 50:
+            raise PDFExtractionError(
+                "Policy document PDF appears to be empty or unreadable. "
+                "Cannot proceed with analysis."
+            )
         logger.info(
-            f"[{analysis_id}] Policy document extracted: "
-            f"{len(policy_text)} characters"
+            f"[{analysis_id}] Policy document extracted: {len(policy_text)} characters"
         )
 
-        # =====================================================================
+        # =================================================================
         # Step 2b: Extract text from supporting documents (if any)
-        # =====================================================================
+        # =================================================================
         supporting_text = ""
         supporting_doc_url = None
 
-        # Try to get supporting documents URL from Firestore claim doc
+        # Fetch claim doc if not already fetched
         if not claim_doc:
             claim_doc = get_claim(claim_data.claim_id)
         if claim_doc:
             supporting_doc_url = claim_doc.get("supportingDocuments")
 
-        if supporting_doc_url and supporting_doc_url not in ("some URL", ""):
-            logger.info(
-                f"[{analysis_id}] Step 2b: Extracting supporting documents text..."
-            )
+        if supporting_doc_url and supporting_doc_url.strip() not in ("", "some URL"):
+            logger.info(f"[{analysis_id}] Step 2b: Extracting supporting documents text...")
             try:
                 supporting_text = await pdf_service.extract_text(supporting_doc_url)
                 logger.info(
@@ -169,19 +199,18 @@ async def process_claim_analysis(
                     f"{len(supporting_text)} characters"
                 )
             except Exception as e:
+                # Non-fatal — log and continue without supporting docs
                 logger.warning(
                     f"[{analysis_id}] Could not extract supporting documents "
-                    f"(non-fatal): {e}"
+                    f"(non-fatal, continuing): {e}"
                 )
                 supporting_text = ""
         else:
-            logger.info(
-                f"[{analysis_id}] Step 2b: No supporting documents found for this claim"
-            )
+            logger.info(f"[{analysis_id}] Step 2b: No supporting documents for this claim")
 
-        # =====================================================================
-        # Step 3: Build structured prompt (all 6 FR-34 fields)
-        # =====================================================================
+        # =================================================================
+        # Step 3: Build structured prompt (FR-34: all 6 required fields)
+        # =================================================================
         logger.info(f"[{analysis_id}] Step 3: Building analysis prompt (FR-34: 6/6 fields)...")
         user_prompt = build_analysis_prompt(
             claim_id=claim_data.claim_id,
@@ -192,9 +221,9 @@ async def process_claim_analysis(
             supporting_documents_text=supporting_text,
         )
 
-        # =====================================================================
+        # =================================================================
         # Step 4: Call Gemini LLM API
-        # =====================================================================
+        # =================================================================
         logger.info(f"[{analysis_id}] Step 4: Calling Gemini API...")
         llm_response = await llm_service.analyze(
             user_prompt=user_prompt,
@@ -202,16 +231,25 @@ async def process_claim_analysis(
         )
         logger.info(f"[{analysis_id}] Gemini response received")
 
-        # =====================================================================
+        # =================================================================
         # Step 5: Parse and validate LLM response
-        # =====================================================================
-        logger.info(f"[{analysis_id}] Step 5: Parsing LLM response...")
+        # =================================================================
+        logger.info(f"[{analysis_id}] Step 5: Parsing and validating LLM response...")
         parsed = _parse_llm_response(llm_response)
+        logger.info(
+            f"[{analysis_id}] Decision: {parsed['coverage_decision']} "
+            f"(confidence: {parsed.get('confidence_score', 'N/A')})"
+        )
+        if parsed.get("rejection_reasons"):
+            logger.info(
+                f"[{analysis_id}] Rejection reasons: {parsed['rejection_reasons']}"
+            )
 
-        # =====================================================================
+        # =================================================================
         # Step 6: Generate draft response (US-23)
-        # Only AI-generated for not_covered; hardcoded for covered
-        # =====================================================================
+        # covered → hardcoded approval statement
+        # not_covered → AI-generated rejection letter
+        # =================================================================
         logger.info(f"[{analysis_id}] Step 6: Generating draft response...")
         draft_text = await response_service.generate_draft(
             claim_id=claim_data.claim_id,
@@ -221,16 +259,17 @@ async def process_claim_analysis(
             reasoning=parsed["reasoning"],
             applicable_clauses=parsed["applicable_clauses"],
             flags=parsed.get("flags", []),
+            rejection_reasons=parsed.get("rejection_reasons", []),
         )
 
-        # =====================================================================
+        # =================================================================
         # Step 7: Write aiDecision + aiMessage to the claims collection
         # aiMessage = the AI reasoning (NOT the draft letter)
-        # =====================================================================
+        # =================================================================
         processing_time = time.time() - start_time
         logger.info(
             f"[{analysis_id}] Step 7: Updating claim {claim_data.claim_id} "
-            f"with aiDecision and aiMessage (reasoning)..."
+            f"with aiDecision='{parsed['coverage_decision']}' and aiMessage..."
         )
         update_claim_with_ai_result(
             claim_id=claim_data.claim_id,
@@ -238,21 +277,20 @@ async def process_claim_analysis(
             ai_message=parsed["reasoning"],
         )
 
-        # =====================================================================
+        # =================================================================
         # Step 8: Cache completed results in memory for GET endpoint
-        # =====================================================================
+        # =================================================================
         logger.info(
             f"[{analysis_id}] Step 8: Caching results in memory "
-            f"(processing time: {processing_time:.2f}s)..."
+            f"(total time: {processing_time:.2f}s)"
         )
-
-        # Build completed record
         record.update({
             "status": "completed",
             "coverage_decision": parsed["coverage_decision"],
             "confidence_score": parsed.get("confidence_score", 0.0),
             "applicable_clauses": parsed.get("applicable_clauses", []),
             "reasoning": parsed.get("reasoning", ""),
+            "rejection_reasons": parsed.get("rejection_reasons", []),
             "flags": parsed.get("flags", []),
             "draft_response": draft_text,
             "ai_model_used": settings.LLM_MODEL,
@@ -262,9 +300,10 @@ async def process_claim_analysis(
         save_analysis_to_memory(analysis_id, record)
 
         logger.info(
-            f"[{analysis_id}] Analysis completed successfully. "
+            f"[{analysis_id}] Analysis pipeline completed successfully. "
             f"Decision: {parsed['coverage_decision']}, "
-            f"Confidence: {parsed.get('confidence_score', 'N/A')}"
+            f"Confidence: {parsed.get('confidence_score', 'N/A')}, "
+            f"Time: {processing_time:.2f}s"
         )
 
     except (PDFExtractionError, PDFDownloadError) as e:
@@ -298,7 +337,12 @@ def _parse_llm_response(response: dict) -> dict:
     """
     Parse and validate the structured LLM response.
 
-    Ensures all required fields are present and have valid values.
+    Enforces:
+    - Valid coverage_decision (only "covered" or "not_covered")
+    - Valid confidence_score (0.0 to 1.0)
+    - Valid applicable_clauses list
+    - rejection_reasons list (new field from hardened prompt)
+    - reasoning and flags fields
 
     Args:
         response: Raw parsed JSON from the LLM.
@@ -309,8 +353,8 @@ def _parse_llm_response(response: dict) -> dict:
     Raises:
         LLMResponseParsingError: If required fields are missing or invalid.
     """
-    # Validate coverage_decision
-    coverage_decision = response.get("coverage_decision", "").lower()
+    # Validate coverage_decision — only two valid values
+    coverage_decision = response.get("coverage_decision", "").lower().strip()
     valid_decisions = {"covered", "not_covered"}
     if coverage_decision not in valid_decisions:
         raise LLMResponseParsingError(
@@ -326,6 +370,8 @@ def _parse_llm_response(response: dict) -> dict:
             confidence_score = max(0.0, min(1.0, confidence_score))
         except (TypeError, ValueError):
             confidence_score = 0.0
+    else:
+        confidence_score = 0.0
 
     # Validate applicable_clauses
     clauses = response.get("applicable_clauses", [])
@@ -336,17 +382,35 @@ def _parse_llm_response(response: dict) -> dict:
     for clause in clauses:
         if isinstance(clause, dict):
             validated_clauses.append({
-                "clause_id": clause.get("clause_id", "Unknown"),
-                "clause_text": clause.get("clause_text", ""),
-                "relevance": clause.get("relevance", ""),
+                "clause_id": str(clause.get("clause_id", "Unknown")),
+                "clause_text": str(clause.get("clause_text", "")),
+                "relevance": str(clause.get("relevance", "")),
             })
+
+    # Validate rejection_reasons (new field)
+    rejection_reasons = response.get("rejection_reasons", [])
+    if not isinstance(rejection_reasons, list):
+        rejection_reasons = []
+    rejection_reasons = [str(r) for r in rejection_reasons if r]
+
+    # Validate flags
+    flags = response.get("flags", [])
+    if not isinstance(flags, list):
+        flags = []
+    flags = [str(f) for f in flags if f]
+
+    # Validate reasoning
+    reasoning = response.get("reasoning", "No reasoning provided")
+    if not reasoning or not isinstance(reasoning, str):
+        reasoning = "No reasoning provided"
 
     return {
         "coverage_decision": coverage_decision,
         "confidence_score": confidence_score,
         "applicable_clauses": validated_clauses,
-        "reasoning": response.get("reasoning", "No reasoning provided"),
-        "flags": response.get("flags", []),
+        "rejection_reasons": rejection_reasons,
+        "reasoning": reasoning,
+        "flags": flags,
     }
 
 
